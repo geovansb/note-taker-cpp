@@ -1,0 +1,38 @@
+#pragma once
+#include <functional>
+#include <mutex>
+#include <vector>
+#include "vad.h"
+
+// Assembles a stream of float32 audio blocks into speech chunks.
+//
+// State machine:
+//   LISTENING → RECORDING  when VAD detects speech
+//   RECORDING → LISTENING  when silence >= SILENCE_TIMEOUT_S
+//                          AND chunk >= MIN_CHUNK_MS
+//   RECORDING → LISTENING  (hard flush) when chunk >= max_chunk_s
+//
+// feed() is safe to call from the AVAudioEngine tap thread.
+// on_chunk is invoked from feed() (i.e. on the tap thread) outside the mutex.
+class ChunkAssembler {
+public:
+    using OnChunkCb = std::function<void(std::vector<float>)>;
+
+    ChunkAssembler(Vad& vad, float max_chunk_s, OnChunkCb on_chunk);
+
+    void feed(const float* samples, size_t n);
+
+private:
+    void flush(std::vector<float>& out);
+
+    Vad&        vad_;
+    float       max_chunk_s_;
+    OnChunkCb   on_chunk_;
+
+    enum class State { LISTENING, RECORDING };
+    State  state_           = State::LISTENING;
+    size_t silence_samples_ = 0;
+
+    std::vector<float> buffer_;
+    std::mutex         mutex_;
+};

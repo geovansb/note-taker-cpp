@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.local.note-taker</string>
+    <key>CFBundleName</key>
+    <string>note-taker</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Captures microphone audio for local transcription.</string>
+</dict>
+</plist>
