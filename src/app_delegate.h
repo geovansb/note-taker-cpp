@@ -9,9 +9,4 @@
 // Update the menu bar icon text (call from any thread — dispatches to main queue).
 - (void)setStatusTitle:(NSString*)title;
 
-// Stub selectors — no-ops until AppController wired
-- (void)startRecording:(id)sender;
-- (void)stopRecording:(id)sender;
-- (void)openNotesFolder:(id)sender;
-
 @end

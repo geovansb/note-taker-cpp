@@ -58,7 +58,6 @@ add_custom_command(TARGET note-taker POST_BUILD
 add_executable(note-taker-bar MACOSX_BUNDLE
     src/bar_main.mm
     src/app_delegate.mm
-    src/event_tap.mm
     src/audio_capture.mm
     src/vad.cpp
     src/chunk_assembler.cpp
