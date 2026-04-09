@@ -34,13 +34,22 @@ public:
         wav_dir_  = wav_dir;
     }
 
+    // Optional: callback invoked after each *dictation* chunk is transcribed.
+    // Receives the concatenated text of all non-empty segments.
+    // Called on the worker thread — not the main thread.
+    void setOnResult(std::function<void(const std::string&)> cb) {
+        on_result_ = std::move(cb);
+    }
+
     // Load model and start worker thread. Returns false on model load failure.
     bool start();
 
     // Enqueue a chunk for transcription. chunk_start_ms is the wall-clock time
     // (ms since Unix epoch) when the chunk began. Bounded by PROCESSING_QUEUE_MAX:
     // drops the oldest pending chunk if full (never blocks the caller).
-    void enqueue(std::vector<float> chunk, int64_t chunk_start_ms);
+    // is_dictation=true: on_result callback fires; OutputWriter is skipped.
+    void enqueue(std::vector<float> chunk, int64_t chunk_start_ms,
+                 bool is_dictation = false);
 
     // Signal stop, wait for in-flight transcription to finish, then join.
     void stop();
@@ -50,7 +59,8 @@ private:
 
     struct ChunkItem {
         std::vector<float> samples;
-        int64_t            start_ms;  // wall-clock ms (Unix epoch) when chunk was captured
+        int64_t            start_ms;     // wall-clock ms (Unix epoch) when chunk was captured
+        bool               is_dictation; // true → call on_result_, skip OutputWriter
     };
 
     std::string    model_path_;
@@ -62,6 +72,8 @@ private:
     std::string    wav_dir_;
     int64_t        session_start_ms_ = 0;
     int            wav_chunk_idx_    = 0;
+
+    std::function<void(const std::string&)> on_result_;
 
     struct whisper_context* ctx_ = nullptr;
 

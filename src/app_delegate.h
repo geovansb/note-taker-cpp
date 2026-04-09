@@ -6,7 +6,10 @@
 // AppController will be attached in T4.3; for now the delegate is self-contained.
 @interface AppDelegate : NSObject <NSApplicationDelegate>
 
-// Update the menu bar icon text (call from any thread — dispatches to main queue).
+// Update the menu bar label (must be called on main thread).
 - (void)setStatusTitle:(NSString*)title;
+
+// Enable/disable Start/Stop Recording items based on status string (main thread).
+- (void)updateMenuForStatus:(NSString*)status;
 
 @end

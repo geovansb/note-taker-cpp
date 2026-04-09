@@ -58,6 +58,8 @@ add_custom_command(TARGET note-taker POST_BUILD
 add_executable(note-taker-bar MACOSX_BUNDLE
     src/bar_main.mm
     src/app_delegate.mm
+    src/app_controller.cpp
+    src/event_tap.mm
     src/audio_capture.mm
     src/vad.cpp
     src/chunk_assembler.cpp
@@ -83,6 +85,23 @@ target_link_libraries(note-taker-bar PRIVATE
     "-framework AudioToolbox"
     "-framework CoreGraphics"
     "-framework ApplicationServices"
+    "-framework Carbon"
+)
+# Copy ggml Metal resources into the bundle before signing.
+# ggml looks for these via [NSBundle mainBundle] at runtime, so they must live
+# in Contents/Resources/. The .metallib is the precompiled shader library;
+# .metal is the source fallback used if the library is missing.
+add_custom_command(TARGET note-taker-bar POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_DIR:note-taker-bar>/Contents/Resources"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_BINARY_DIR}/bin/default.metallib"
+            "$<TARGET_BUNDLE_DIR:note-taker-bar>/Contents/Resources/default.metallib"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_BINARY_DIR}/bin/ggml-metal.metal"
+            "$<TARGET_BUNDLE_DIR:note-taker-bar>/Contents/Resources/ggml-metal.metal"
+    COMMENT "Bundling ggml Metal resources into note-taker-bar.app"
+    VERBATIM
 )
 # Sign the whole .app bundle (not just the executable).
 add_custom_command(TARGET note-taker-bar POST_BUILD

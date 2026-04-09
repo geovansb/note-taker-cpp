@@ -43,13 +43,14 @@ bool WhisperWorker::start() {
     return true;
 }
 
-void WhisperWorker::enqueue(std::vector<float> chunk, int64_t chunk_start_ms) {
+void WhisperWorker::enqueue(std::vector<float> chunk, int64_t chunk_start_ms,
+                            bool is_dictation) {
     std::lock_guard<std::mutex> lock(mutex_);
     if ((int)queue_.size() >= PROCESSING_QUEUE_MAX) {
         fprintf(stderr, "warn: transcription queue full, dropping oldest chunk\n");
         queue_.pop();
     }
-    queue_.push({std::move(chunk), chunk_start_ms});
+    queue_.push({std::move(chunk), chunk_start_ms, is_dictation});
     cv_.notify_one();
 }
 
@@ -118,23 +119,32 @@ void WhisperWorker::workerLoop() {
         // Offset of chunk start relative to session start (for OutputWriter).
         int64_t chunk_offset_ms = item.start_ms - session_start_ms_;
 
-        int n = whisper_full_n_segments(ctx_);
+        int         n         = whisper_full_n_segments(ctx_);
+        std::string full_text;  // accumulates all segments (used for dictation callback)
+
         for (int i = 0; i < n; ++i) {
             const char* text = whisper_full_get_segment_text(ctx_, i);
             if (!text || text[0] == '\0') continue;
 
+            full_text += text;
+
             fprintf(stdout, "[%s]%s\n", ts, text);
             fflush(stdout);
 
-            if (output_writer_) {
-                // whisper timestamps are in centiseconds from chunk start.
+            // Session path: add to OutputWriter with absolute timestamps.
+            if (!item.is_dictation && output_writer_) {
                 int64_t t0_ms = chunk_offset_ms + whisper_full_get_segment_t0(ctx_, i) * 10;
                 int64_t t1_ms = chunk_offset_ms + whisper_full_get_segment_t1(ctx_, i) * 10;
                 output_writer_->addSegment(t0_ms, t1_ms, text);
             }
         }
 
-        if (output_writer_) {
+        if (item.is_dictation) {
+            // Dictation path: fire on_result callback (AppController resets mode to IDLE).
+            if (on_result_ && !full_text.empty()) {
+                on_result_(full_text);
+            }
+        } else if (output_writer_) {
             output_writer_->flush();
         }
     }
