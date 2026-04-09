@@ -10,6 +10,7 @@ void ChunkAssembler::feed(const float* samples, size_t n) {
 
     bool is_speech = vad_.isSpeech(samples, n);
     std::vector<float> to_emit;
+    int state_change = 0; // +1 = started capturing, -1 = stopped capturing
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -19,6 +20,7 @@ void ChunkAssembler::feed(const float* samples, size_t n) {
                 state_ = State::RECORDING;
                 silence_samples_ = 0;
                 buffer_.insert(buffer_.end(), samples, samples + n);
+                state_change = +1;
             }
             // Discard non-speech blocks in LISTENING state.
 
@@ -40,10 +42,15 @@ void ChunkAssembler::feed(const float* samples, size_t n) {
 
             if (silence_flush || hard_flush) {
                 flush(to_emit);
+                state_change = -1;
             }
         }
     }
 
+    // Fire callbacks outside the mutex.
+    if (state_change != 0 && on_state_) {
+        on_state_(state_change > 0);
+    }
     if (!to_emit.empty()) {
         on_chunk_(std::move(to_emit));
     }
@@ -66,6 +73,7 @@ bool ChunkAssembler::forceFlush() {
 void ChunkAssembler::flush(std::vector<float>& out) {
     out = std::move(buffer_);
     buffer_.clear();
+    buffer_.reserve(static_cast<size_t>(max_chunk_s_ * CAPTURE_SAMPLE_RATE));
     silence_samples_ = 0;
     state_ = State::LISTENING;
 }

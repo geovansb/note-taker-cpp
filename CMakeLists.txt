@@ -87,6 +87,7 @@ target_link_libraries(note-taker-bar PRIVATE
     "-framework CoreGraphics"
     "-framework ApplicationServices"
     "-framework Carbon"
+    "-framework UserNotifications"
 )
 # Copy ggml Metal resources into the bundle before signing.
 # ggml looks for these via [NSBundle mainBundle] at runtime, so they must live

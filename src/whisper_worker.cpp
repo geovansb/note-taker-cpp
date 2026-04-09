@@ -46,7 +46,7 @@ bool WhisperWorker::start() {
 void WhisperWorker::enqueue(std::vector<float> chunk, int64_t chunk_start_ms,
                             bool is_dictation) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if ((int)queue_.size() >= PROCESSING_QUEUE_MAX) {
+    if (queue_.size() >= static_cast<size_t>(PROCESSING_QUEUE_MAX)) {
         fprintf(stderr, "warn: transcription queue full, dropping oldest chunk\n");
         queue_.pop();
         if (on_error_) on_error_("Transcription queue full — audio chunk dropped");

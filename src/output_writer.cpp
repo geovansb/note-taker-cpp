@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <fcntl.h>
 #include <sys/stat.h>
 
 using json = nlohmann::json;
@@ -16,7 +17,8 @@ static void mkdir_p(const std::string& path) {
 
 static void write_atomic(const std::string& path, const std::string& content) {
     std::string tmp = path + ".tmp";
-    FILE* f = fopen(tmp.c_str(), "w");
+    int fd = open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    FILE* f = fd >= 0 ? fdopen(fd, "w") : nullptr;
     if (!f) {
         fprintf(stderr, "warn: cannot write %s: %s\n", tmp.c_str(), strerror(errno));
         return;

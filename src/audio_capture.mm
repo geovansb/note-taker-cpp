@@ -7,6 +7,7 @@
 struct AudioCapture::Impl {
     AVAudioEngine*    engine    = nil;
     AVAudioConverter* converter = nil;
+    AVAudioPCMBuffer* outBuf   = nil;  // reused across tap callbacks
 };
 
 AudioCapture::AudioCapture() : impl_(new Impl()) {}
@@ -67,22 +68,25 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
 
     // macOS requires the tap format to exactly match the inputNode's hardware format.
     // We convert to 16kHz mono float32 explicitly inside the callback.
+    // Pre-allocate the output buffer once; reused across all tap callbacks to avoid
+    // per-callback allocations on the realtime audio thread.
+    AVAudioFrameCount outCapacity =
+        (AVAudioFrameCount)(4096 * targetFormat.sampleRate / hwFormat.sampleRate) + 2;
+    impl_->outBuf = [[AVAudioPCMBuffer alloc]
+        initWithPCMFormat:targetFormat frameCapacity:outCapacity];
+
     AVAudioConverter* conv = impl_->converter; // strong capture for the block
+    AVAudioPCMBuffer* reusableBuf = impl_->outBuf;
     [inputNode installTapOnBus:0
                     bufferSize:4096
                         format:hwFormat
                          block:^(AVAudioPCMBuffer* inBuf, AVAudioTime*) {
         @autoreleasepool {
-            AVAudioFrameCount outCapacity =
-                (AVAudioFrameCount)(inBuf.frameLength *
-                                    targetFormat.sampleRate / hwFormat.sampleRate) + 2;
-
-            AVAudioPCMBuffer* outBuf = [[AVAudioPCMBuffer alloc]
-                initWithPCMFormat:targetFormat frameCapacity:outCapacity];
+            reusableBuf.frameLength = 0;
 
             __block BOOL consumed = NO;
             NSError* convErr = nil;
-            [conv convertToBuffer:outBuf
+            [conv convertToBuffer:reusableBuf
                             error:&convErr
               withInputFromBlock:^AVAudioBuffer*(AVAudioPacketCount,
                                                  AVAudioConverterInputStatus* status) {
@@ -95,8 +99,8 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
                 return inBuf;
             }];
 
-            if (!convErr && outBuf.frameLength > 0) {
-                on_block(outBuf.floatChannelData[0], outBuf.frameLength);
+            if (!convErr && reusableBuf.frameLength > 0) {
+                on_block(reusableBuf.floatChannelData[0], reusableBuf.frameLength);
             }
         }
     }];
@@ -117,6 +121,7 @@ void AudioCapture::stop() {
         [impl_->engine.inputNode removeTapOnBus:0];
         [impl_->engine stop];
         impl_->converter = nil;
+        impl_->outBuf    = nil;
         impl_->engine    = nil;
     }
 }

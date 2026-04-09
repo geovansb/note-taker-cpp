@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 
 static bool write_le16(FILE* f, uint16_t v) {
@@ -59,12 +60,15 @@ void writeWav(const std::string& path,
     ok = ok && fwrite("data", 1, 4, f) == 4;
     ok = ok && write_le32(f, data_size);
 
-    // Samples: float32 → int16
-    for (size_t i = 0; i < n && ok; ++i) {
+    // Samples: float32 → int16, batched into a single fwrite.
+    std::vector<uint8_t> pcm(n * 2);
+    for (size_t i = 0; i < n; ++i) {
         float  s = std::max(-1.0f, std::min(1.0f, samples[i]));
         int16_t v = static_cast<int16_t>(s * 32767.0f);
-        ok = ok && write_le16(f, static_cast<uint16_t>(v));
+        pcm[i * 2]     = static_cast<uint8_t>(v & 0xFF);
+        pcm[i * 2 + 1] = static_cast<uint8_t>((v >> 8) & 0xFF);
     }
+    ok = ok && fwrite(pcm.data(), 1, pcm.size(), f) == pcm.size();
 
     if (!ok) {
         fprintf(stderr, "warn: writeWav: short write to %s: %s\n",

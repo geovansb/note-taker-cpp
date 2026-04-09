@@ -17,6 +17,7 @@
 class ChunkAssembler {
 public:
     using OnChunkCb = std::function<void(std::vector<float>)>;
+    using OnStateCb = std::function<void(bool capturing)>;
 
     ChunkAssembler(Vad& vad, float max_chunk_s, OnChunkCb on_chunk);
 
@@ -24,6 +25,9 @@ public:
 
     void setSilenceTimeout(float seconds) { silence_timeout_s_ = seconds; }
     float silenceTimeout() const { return silence_timeout_s_; }
+
+    // Called on the tap thread when state transitions between LISTENING ↔ RECORDING.
+    void setOnStateChange(OnStateCb cb) { on_state_ = std::move(cb); }
 
     // Emit the current buffer immediately, regardless of VAD or silence state.
     // Useful when recording stops and a partial chunk would otherwise be lost.
@@ -38,6 +42,7 @@ private:
     float       max_chunk_s_;
     float       silence_timeout_s_ = 5.0f;  // default SILENCE_TIMEOUT_S
     OnChunkCb   on_chunk_;
+    OnStateCb   on_state_;
 
     enum class State { LISTENING, RECORDING };
     State  state_           = State::LISTENING;

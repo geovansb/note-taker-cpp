@@ -102,11 +102,7 @@ All settings are accessible from the menu bar icon and persist across restarts.
 
 Choose the transcription language or leave it on **Auto** for automatic detection. Changing the language takes effect immediately — no restart needed.
 
-Available: Auto, Português, English, Español, Français, Deutsch.
-
-### Translate to English
-
-When enabled, all speech is translated to English regardless of the source language. This uses Whisper's built-in translation capability (not a separate translation step). Works best with language set to Auto.
+Available: Auto, Português, English, Español.
 
 ### VAD Sensitivity
 

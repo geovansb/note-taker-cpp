@@ -152,6 +152,11 @@ bool AppController::start() {
             impl_->worker->enqueue(std::move(chunk), now_ms, /*is_dictation=*/false);
         }
     );
+    impl_->assembler->setOnStateChange([this](bool capturing) {
+        if (impl_->mode.load(std::memory_order_relaxed) == MODE_RECORDING) {
+            impl_->notifyStatus(capturing ? "🔴 Capturing…" : "🔴 Listening…");
+        }
+    });
 
     // ── AudioCapture ──────────────────────────────────────────────────────────
     // Started once and never stopped — eliminates the ~300ms AVAudioEngine
@@ -204,6 +209,7 @@ void AppController::onHotkeyDown() {
     {
         std::lock_guard<std::mutex> lock(impl_->dict_mutex);
         impl_->dict_buffer.clear();
+        impl_->dict_buffer.reserve(30 * CAPTURE_SAMPLE_RATE); // 30s max dictation
     }
     impl_->notifyStatus("⏺ Dictating…");
 }
@@ -253,7 +259,7 @@ void AppController::startSession() {
     );
     impl_->worker->setOutputWriter(impl_->session_writer.get());
 
-    impl_->notifyStatus("🔴 Recording");
+    impl_->notifyStatus("🔴 Listening…");
 }
 
 void AppController::stopSession() {

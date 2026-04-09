@@ -3,6 +3,7 @@
 #include "event_tap.h"
 #include "text_injector.h"
 #include <Carbon/Carbon.h>
+#import <UserNotifications/UserNotifications.h>
 
 static NSString* const kLangKey      = @"language";
 static NSString* const kModelKey     = @"model";
@@ -21,6 +22,7 @@ static NSString* const kOutputDirKey   = @"output_dir";
     NSString*      _model;        // selected for next restart
     NSString*      _activeModel;  // currently loaded
     int            _hotkeyCode;
+    BOOL           _wasFinalizing; // track session finalize → idle transition
 }
 
 // ── NSApplicationDelegate ─────────────────────────────────────────────────────
@@ -43,6 +45,11 @@ static NSString* const kOutputDirKey   = @"output_dir";
     _model        = [[NSUserDefaults standardUserDefaults] stringForKey:kModelKey];
     _activeModel  = _model;  // loaded model = selected at launch
     _hotkeyCode   = (int)[[NSUserDefaults standardUserDefaults] integerForKey:kHotkeyKey];
+
+    // Request notification permission (fire-and-forget; no-op if already granted).
+    [[UNUserNotificationCenter currentNotificationCenter]
+        requestAuthorizationWithOptions:UNAuthorizationOptionAlert
+                      completionHandler:^(BOOL, NSError*) {}];
 
     [self setupStatusItem];
     [self startController];
@@ -138,6 +145,16 @@ static NSString* const kOutputDirKey   = @"output_dir";
             if (!d) return;
             [d setStatusTitle:s];
             [d updateMenuForStatus:s];
+
+            // Notify user when a recording session finishes.
+            if (d->_wasFinalizing && [s hasPrefix:@"● Idle"]) {
+                d->_wasFinalizing = NO;
+                [d postSessionSavedNotification];
+            }
+            if ([s hasPrefix:@"⏳ Finalizing"]) {
+                d->_wasFinalizing = YES;
+            }
+
             // Show prominent alerts for startup errors.
             if ([s hasPrefix:@"⚠ Model not found"]) {
                 [d showModelMissingAlertForKey:d->_model];
@@ -278,6 +295,8 @@ static NSString* const kOutputDirKey   = @"output_dir";
 
     [menu addItem:[NSMenuItem separatorItem]];
 
+    [menu addItemWithTitle:@"About note-taker"
+                    action:@selector(showAbout:) keyEquivalent:@""];
     [menu addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
 
     return menu;
@@ -449,6 +468,36 @@ static NSString* const kOutputDirKey   = @"output_dir";
     if (_controller) _controller->stopSession();
 }
 
+- (void)showAbout:(id)__unused sender {
+    NSString* version = [[NSBundle mainBundle]
+        objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+    if (!version) version = @"dev";
+
+    NSAlert* alert = [[NSAlert alloc] init];
+    alert.messageText = @"note-taker";
+    alert.informativeText = [NSString stringWithFormat:
+        @"Version %@\nModel: %@\n\nLocal speech transcription powered by whisper.cpp.\n"
+        @"github.com/geovansb/note-taker-cpp",
+        version, _activeModel];
+    alert.alertStyle = NSAlertStyleInformational;
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
+}
+
+- (void)postSessionSavedNotification {
+    UNMutableNotificationContent* content = [[UNMutableNotificationContent alloc] init];
+    content.title = @"Recording saved";
+    content.body  = [NSString stringWithFormat:@"Transcript saved to %@",
+                     [NSString stringWithUTF8String:_outputDir.c_str()]];
+
+    UNNotificationRequest* req =
+        [UNNotificationRequest requestWithIdentifier:@"session-saved"
+                                             content:content
+                                             trigger:nil]; // deliver immediately
+    [[UNUserNotificationCenter currentNotificationCenter]
+        addNotificationRequest:req withCompletionHandler:nil];
+}
+
 - (void)openNotesFolder:(id)__unused sender {
     NSString* dir = [NSString stringWithUTF8String:_outputDir.c_str()];
     if (![[NSFileManager defaultManager] fileExistsAtPath:dir]) {
@@ -473,6 +522,17 @@ static NSString* const kOutputDirKey   = @"output_dir";
 
     if ([panel runModal] == NSModalResponseOK && panel.URL) {
         NSString* path = panel.URL.path;
+
+        if (access([path fileSystemRepresentation], W_OK) != 0) {
+            NSAlert* alert = [[NSAlert alloc] init];
+            alert.messageText = @"Folder not writable";
+            alert.informativeText = [NSString stringWithFormat:
+                @"Cannot write to \"%@\". Choose a different folder.", path];
+            [alert addButtonWithTitle:@"OK"];
+            [alert runModal];
+            return;
+        }
+
         _outputDir = std::string([path UTF8String]);
         [[NSUserDefaults standardUserDefaults] setObject:path forKey:kOutputDirKey];
         if (_controller) _controller->setOutputDir(_outputDir);
@@ -544,6 +604,21 @@ static NSString* const kOutputDirKey   = @"output_dir";
     NSMenuItem* modelParent = [_statusItem.menu itemWithTag:6];
     if (modelParent) {
         modelParent.submenu = [self buildModelMenu];
+    }
+
+    // Offer to restart now so the new model takes effect immediately.
+    NSAlert* alert = [[NSAlert alloc] init];
+    alert.messageText = @"Restart required";
+    alert.informativeText = [NSString stringWithFormat:
+        @"Model \"%@\" will be loaded after restarting the app.", m];
+    [alert addButtonWithTitle:@"Restart Now"];
+    [alert addButtonWithTitle:@"Later"];
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+        // Re-launch the app bundle, then terminate.
+        NSString* bundlePath = [[NSBundle mainBundle] bundlePath];
+        [NSTask launchedTaskWithLaunchPath:@"/usr/bin/open"
+                                 arguments:@[@"-n", bundlePath]];
+        [NSApp terminate:nil];
     }
 }
 
