@@ -154,7 +154,6 @@ worker thread    →  WhisperWorker → injectText() OR OutputWriter
 # Download models
 ./scripts/download_model.sh large-v3        # ~3.1 GB
 ./scripts/download_model.sh large-v3-turbo  # ~1.5 GB
-./scripts/download_model.sh large-v3-q5_0   # ~1.1 GB
 
 # CLI tool (M1–M3)
 ./build/note-taker --model models/ggml-base.bin

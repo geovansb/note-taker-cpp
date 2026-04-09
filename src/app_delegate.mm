@@ -17,7 +17,8 @@ static NSString* const kSilenceKey     = @"silence_timeout";
     EventTap       _eventTap;     // owned; lives on main thread, forwards to controller
     std::string    _outputDir;
     NSString*      _language;
-    NSString*      _model;
+    NSString*      _model;        // selected for next restart
+    NSString*      _activeModel;  // currently loaded
     int            _hotkeyCode;
 }
 
@@ -36,9 +37,10 @@ static NSString* const kSilenceKey     = @"silence_timeout";
         kSensitivityKey: @"medium",
         kSilenceKey:     @5.0,
     }];
-    _language    = [[NSUserDefaults standardUserDefaults] stringForKey:kLangKey];
-    _model       = [[NSUserDefaults standardUserDefaults] stringForKey:kModelKey];
-    _hotkeyCode  = (int)[[NSUserDefaults standardUserDefaults] integerForKey:kHotkeyKey];
+    _language     = [[NSUserDefaults standardUserDefaults] stringForKey:kLangKey];
+    _model        = [[NSUserDefaults standardUserDefaults] stringForKey:kModelKey];
+    _activeModel  = _model;  // loaded model = selected at launch
+    _hotkeyCode   = (int)[[NSUserDefaults standardUserDefaults] integerForKey:kHotkeyKey];
 
     [self setupStatusItem];
     [self startController];
@@ -270,9 +272,9 @@ static NSString* const kSilenceKey     = @"silence_timeout";
     translateItem.state = translateOn ? NSControlStateValueOn : NSControlStateValueOff;
     [menu addItem:translateItem];
 
-    // tag 6 — Model submenu (title shows active model, rebuilt in selectModel:)
+    // tag 6 — Model submenu (title shows loaded model, rebuilt in selectModel:)
     NSMenuItem* modelParent = [[NSMenuItem alloc] initWithTitle:
-        [NSString stringWithFormat:@"Model — %@", _model]
+        [NSString stringWithFormat:@"Model — %@", _activeModel]
                                 action:nil keyEquivalent:@""];
     modelParent.tag     = 6;
     modelParent.submenu = [self buildModelMenu];
@@ -320,10 +322,18 @@ static NSString* const kSilenceKey     = @"silence_timeout";
     NSArray<NSString*>* models = @[
         @"large-v3",
         @"large-v3-turbo",
-        @"large-v3-q5_0",
     ];
 
-    // Selectable model list (active model shown with checkmark)
+    // Pending restart hint
+    if (![_model isEqualToString:_activeModel]) {
+        NSMenuItem* pending = [[NSMenuItem alloc] initWithTitle:
+            [NSString stringWithFormat:@"⟳ %@ on next restart", _model]
+                                action:nil keyEquivalent:@""];
+        pending.enabled = NO;
+        [sub addItem:pending];
+        [sub addItem:[NSMenuItem separatorItem]];
+    }
+
     for (NSString* m in models) {
         NSString* path   = [self modelPathForKey:m];
         BOOL      exists = [[NSFileManager defaultManager] fileExistsAtPath:path];
@@ -331,10 +341,11 @@ static NSString* const kSilenceKey     = @"silence_timeout";
         NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title
                              action:@selector(selectModel:) keyEquivalent:@""];
         item.representedObject = m;
-        item.state = [m isEqualToString:_model] ? NSControlStateValueOn : NSControlStateValueOff;
-        item.toolTip = exists
-                       ? @"Requires restart to take effect"
-                       : [NSString stringWithFormat:@"Run: ./scripts/download_model.sh %@", m];
+        // Checkmark on the currently loaded model
+        item.state = [m isEqualToString:_activeModel] ? NSControlStateValueOn : NSControlStateValueOff;
+        if (!exists) {
+            item.toolTip = [NSString stringWithFormat:@"Run: ./scripts/download_model.sh %@", m];
+        }
         [sub addItem:item];
     }
     return sub;
@@ -523,10 +534,9 @@ static NSString* const kSilenceKey     = @"silence_timeout";
     _model = m;
     [[NSUserDefaults standardUserDefaults] setObject:m forKey:kModelKey];
 
-    // Rebuild the submenu so the header and selectable list update immediately.
+    // Rebuild submenu to show pending restart hint. Title stays as _activeModel.
     NSMenuItem* modelParent = [_statusItem.menu itemWithTag:6];
     if (modelParent) {
-        modelParent.title   = [NSString stringWithFormat:@"Model — %@", m];
         modelParent.submenu = [self buildModelMenu];
     }
 }
