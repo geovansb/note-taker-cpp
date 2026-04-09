@@ -55,6 +55,22 @@ static NSString* const kTranslateKey = @"translate";
              stringByStandardizingPath];
 }
 
+- (void)showMicDeniedAlert {
+    NSAlert* alert      = [[NSAlert alloc] init];
+    alert.messageText   = @"Microphone access denied";
+    alert.informativeText = @"Grant permission in System Settings:\n\n"
+                            @"1. Go to Privacy & Security → Microphone\n"
+                            @"2. Enable note-taker-bar\n"
+                            @"3. Restart the app";
+    alert.alertStyle = NSAlertStyleWarning;
+    [alert addButtonWithTitle:@"Open System Settings"];
+    [alert addButtonWithTitle:@"Cancel"];
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+        [[NSWorkspace sharedWorkspace] openURL:
+            [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"]];
+    }
+}
+
 - (void)showModelMissingAlertForKey:(NSString*)key {
     NSAlert* alert      = [[NSAlert alloc] init];
     alert.messageText   = [NSString stringWithFormat:@"Model \"%@\" not found", key];
@@ -94,9 +110,11 @@ static NSString* const kTranslateKey = @"translate";
             if (!d) return;
             [d setStatusTitle:s];
             [d updateMenuForStatus:s];
-            // Show a prominent alert when the model file is missing at startup.
+            // Show prominent alerts for startup errors.
             if ([s hasPrefix:@"⚠ Model not found"]) {
                 [d showModelMissingAlertForKey:d->_model];
+            } else if ([s hasPrefix:@"⚠ Mic denied"]) {
+                [d showMicDeniedAlert];
             }
         });
     });
