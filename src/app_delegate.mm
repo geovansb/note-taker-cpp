@@ -246,13 +246,11 @@ static NSString* const kSilenceKey     = @"silence_timeout";
     stopRec.enabled = NO;
     [menu addItem:stopRec];
 
-    // tag 4 — Open Notes Folder  Cmd+O
-    NSMenuItem* openFolder = [[NSMenuItem alloc] initWithTitle:@"Open Notes Folder"
-                               action:@selector(openNotesFolder:) keyEquivalent:@"o"];
-    openFolder.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-    openFolder.tag     = 4;
-    openFolder.enabled = YES;
-    [menu addItem:openFolder];
+    // Recording Settings submenu
+    NSMenuItem* recSettingsParent = [[NSMenuItem alloc] initWithTitle:@"Recording Settings"
+                                      action:nil keyEquivalent:@""];
+    recSettingsParent.submenu = [self buildRecordingSettingsMenu];
+    [menu addItem:recSettingsParent];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -285,19 +283,6 @@ static NSString* const kSilenceKey     = @"silence_timeout";
                                  action:nil keyEquivalent:@""];
     hotkeyParent.submenu = [self buildHotkeyMenu];
     [menu addItem:hotkeyParent];
-
-    [menu addItem:[NSMenuItem separatorItem]];
-
-    // VAD tuning
-    NSMenuItem* sensitivityParent = [[NSMenuItem alloc] initWithTitle:@"VAD Sensitivity"
-                                      action:nil keyEquivalent:@""];
-    sensitivityParent.submenu = [self buildSensitivityMenu];
-    [menu addItem:sensitivityParent];
-
-    NSMenuItem* silenceParent = [[NSMenuItem alloc] initWithTitle:@"Silence Timeout"
-                                  action:nil keyEquivalent:@""];
-    silenceParent.submenu = [self buildSilenceTimeoutMenu];
-    [menu addItem:silenceParent];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -375,6 +360,34 @@ static NSString* const kSilenceKey     = @"silence_timeout";
         item.state = (code == _hotkeyCode) ? NSControlStateValueOn : NSControlStateValueOff;
         [sub addItem:item];
     }
+    return sub;
+}
+
+- (NSMenu*)buildRecordingSettingsMenu {
+    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Recording Settings"];
+
+    // Open Notes Folder  Cmd+O (tag 4)
+    NSMenuItem* openFolder = [[NSMenuItem alloc] initWithTitle:@"Open Notes Folder"
+                               action:@selector(openNotesFolder:) keyEquivalent:@"o"];
+    openFolder.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+    openFolder.tag     = 4;
+    openFolder.enabled = YES;
+    [sub addItem:openFolder];
+
+    [sub addItem:[NSMenuItem separatorItem]];
+
+    // VAD Sensitivity
+    NSMenuItem* sensitivityParent = [[NSMenuItem alloc] initWithTitle:@"VAD Sensitivity"
+                                      action:nil keyEquivalent:@""];
+    sensitivityParent.submenu = [self buildSensitivityMenu];
+    [sub addItem:sensitivityParent];
+
+    // Silence Timeout
+    NSMenuItem* silenceParent = [[NSMenuItem alloc] initWithTitle:@"Silence Timeout"
+                                  action:nil keyEquivalent:@""];
+    silenceParent.submenu = [self buildSilenceTimeoutMenu];
+    [sub addItem:silenceParent];
+
     return sub;
 }
 
