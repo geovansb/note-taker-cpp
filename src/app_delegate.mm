@@ -1,6 +1,7 @@
 #import "app_delegate.h"
 #include "app_controller.h"
 #include "event_tap.h"
+#include "text_injector.h"
 
 @implementation AppDelegate {
     NSStatusItem*  _statusItem;
@@ -60,9 +61,10 @@
     });
 
     _controller->setOnDictationResult([](std::string text) {
-        // T4.4 will replace this with TextInjector.
-        // For now, log the result so it's visible in the system log.
-        NSLog(@"[dictation] %s", text.c_str());
+        // Inject text at cursor. Must run on main thread (CGEventPost requirement).
+        dispatch_async(dispatch_get_main_queue(), ^{
+            injectText(text);
+        });
     });
 
     // EventTap must start on the main thread so AXIsProcessTrustedWithOptions

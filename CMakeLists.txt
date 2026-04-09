@@ -60,6 +60,7 @@ add_executable(note-taker-bar MACOSX_BUNDLE
     src/app_delegate.mm
     src/app_controller.cpp
     src/event_tap.mm
+    src/text_injector.mm
     src/audio_capture.mm
     src/vad.cpp
     src/chunk_assembler.cpp
