@@ -250,9 +250,11 @@ static NSString* const kHotkeyKey    = @"hotkey_keycode";
 
     [menu addItem:[NSMenuItem separatorItem]];
 
-    // Language submenu
-    NSMenuItem* langParent = [[NSMenuItem alloc] initWithTitle:@"Language"
+    // tag 8 — Language submenu (title shows active language)
+    NSMenuItem* langParent = [[NSMenuItem alloc] initWithTitle:
+        [NSString stringWithFormat:@"Language — %@", [self labelForLanguage:_language]]
                                action:nil keyEquivalent:@""];
+    langParent.tag     = 8;
     langParent.submenu = [self buildLanguageMenu];
     [menu addItem:langParent];
 
@@ -264,8 +266,9 @@ static NSString* const kHotkeyKey    = @"hotkey_keycode";
     translateItem.state = translateOn ? NSControlStateValueOn : NSControlStateValueOff;
     [menu addItem:translateItem];
 
-    // tag 6 — Model submenu (rebuilt in selectModel:)
-    NSMenuItem* modelParent = [[NSMenuItem alloc] initWithTitle:@"Model"
+    // tag 6 — Model submenu (title shows active model, rebuilt in selectModel:)
+    NSMenuItem* modelParent = [[NSMenuItem alloc] initWithTitle:
+        [NSString stringWithFormat:@"Model — %@", _model]
                                 action:nil keyEquivalent:@""];
     modelParent.tag     = 6;
     modelParent.submenu = [self buildModelMenu];
@@ -282,6 +285,14 @@ static NSString* const kHotkeyKey    = @"hotkey_keycode";
     [menu addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
 
     return menu;
+}
+
+- (NSString*)labelForLanguage:(NSString*)key {
+    NSDictionary* map = @{
+        @"auto": @"Auto", @"pt": @"Português", @"en": @"English",
+        @"es": @"Español", @"fr": @"Français", @"de": @"Deutsch",
+    };
+    return map[key] ?: key;
 }
 
 - (NSMenu*)buildLanguageMenu {
@@ -400,6 +411,13 @@ static NSString* const kHotkeyKey    = @"hotkey_keycode";
         item.state = [item.representedObject isEqualToString:key]
                      ? NSControlStateValueOn : NSControlStateValueOff;
     }
+
+    // Update parent menu title to show active language
+    NSMenuItem* langParent = [_statusItem.menu itemWithTag:8];
+    if (langParent) {
+        langParent.title = [NSString stringWithFormat:@"Language — %@",
+                            [self labelForLanguage:key]];
+    }
 }
 
 - (void)selectHotkey:(NSMenuItem*)sender {
@@ -439,7 +457,10 @@ static NSString* const kHotkeyKey    = @"hotkey_keycode";
 
     // Rebuild the submenu so the header and selectable list update immediately.
     NSMenuItem* modelParent = [_statusItem.menu itemWithTag:6];
-    if (modelParent) modelParent.submenu = [self buildModelMenu];
+    if (modelParent) {
+        modelParent.title   = [NSString stringWithFormat:@"Model — %@", m];
+        modelParent.submenu = [self buildModelMenu];
+    }
 }
 
 // ── Status updates ────────────────────────────────────────────────────────────
