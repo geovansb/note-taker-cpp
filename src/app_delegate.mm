@@ -298,16 +298,15 @@ static NSString* const kOutputDirKey   = @"output_dir";
 - (NSString*)labelForLanguage:(NSString*)key {
     NSDictionary* map = @{
         @"auto": @"Auto", @"pt": @"Português", @"en": @"English",
-        @"es": @"Español", @"fr": @"Français", @"de": @"Deutsch",
+        @"es": @"Español",
     };
     return map[key] ?: key;
 }
 
 - (NSMenu*)buildLanguageMenu {
     NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Language"];
-    NSArray<NSString*>* keys   = @[@"auto", @"pt", @"en", @"es", @"fr", @"de"];
-    NSArray<NSString*>* labels = @[@"Auto", @"Português", @"English",
-                                    @"Español", @"Français", @"Deutsch"];
+    NSArray<NSString*>* keys   = @[@"auto", @"pt", @"en", @"es"];
+    NSArray<NSString*>* labels = @[@"Auto", @"Português", @"English", @"Español"];
     for (NSUInteger i = 0; i < keys.count; i++) {
         NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:labels[i]
                              action:@selector(selectLanguage:) keyEquivalent:@""];
