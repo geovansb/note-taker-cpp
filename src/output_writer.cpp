@@ -21,7 +21,11 @@ static void write_atomic(const std::string& path, const std::string& content) {
         fprintf(stderr, "warn: cannot write %s: %s\n", tmp.c_str(), strerror(errno));
         return;
     }
-    fwrite(content.c_str(), 1, content.size(), f);
+    size_t written = fwrite(content.c_str(), 1, content.size(), f);
+    if (written != content.size()) {
+        fprintf(stderr, "warn: short write to %s (%zu/%zu bytes): %s\n",
+                tmp.c_str(), written, content.size(), strerror(errno));
+    }
     fclose(f);
     if (rename(tmp.c_str(), path.c_str()) != 0) {
         fprintf(stderr, "warn: rename %s -> %s: %s\n",

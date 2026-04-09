@@ -4,20 +4,20 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <vector>
 
-static void write_le16(FILE* f, uint16_t v) {
+
+static bool write_le16(FILE* f, uint16_t v) {
     uint8_t b[2] = {static_cast<uint8_t>(v & 0xFF),
                     static_cast<uint8_t>((v >> 8) & 0xFF)};
-    fwrite(b, 1, 2, f);
+    return fwrite(b, 1, 2, f) == 2;
 }
 
-static void write_le32(FILE* f, uint32_t v) {
+static bool write_le32(FILE* f, uint32_t v) {
     uint8_t b[4] = {static_cast<uint8_t>(v & 0xFF),
                     static_cast<uint8_t>((v >> 8) & 0xFF),
                     static_cast<uint8_t>((v >> 16) & 0xFF),
                     static_cast<uint8_t>((v >> 24) & 0xFF)};
-    fwrite(b, 1, 4, f);
+    return fwrite(b, 1, 4, f) == 4;
 }
 
 void writeWav(const std::string& path,
@@ -38,30 +38,37 @@ void writeWav(const std::string& path,
     const uint32_t data_size     = static_cast<uint32_t>(n) * block_align;
     const uint32_t chunk_size    = 36 + data_size;
 
+    bool ok = true;
+
     // RIFF header
-    fwrite("RIFF", 1, 4, f);
-    write_le32(f, chunk_size);
-    fwrite("WAVE", 1, 4, f);
+    ok = ok && fwrite("RIFF", 1, 4, f) == 4;
+    ok = ok && write_le32(f, chunk_size);
+    ok = ok && fwrite("WAVE", 1, 4, f) == 4;
 
     // fmt  sub-chunk
-    fwrite("fmt ", 1, 4, f);
-    write_le32(f, 16);                              // sub-chunk size
-    write_le16(f, 1);                               // PCM
-    write_le16(f, static_cast<uint16_t>(num_channels));
-    write_le32(f, static_cast<uint32_t>(sample_rate));
-    write_le32(f, byte_rate);
-    write_le16(f, static_cast<uint16_t>(block_align));
-    write_le16(f, static_cast<uint16_t>(bits_per_sample));
+    ok = ok && fwrite("fmt ", 1, 4, f) == 4;
+    ok = ok && write_le32(f, 16);                              // sub-chunk size
+    ok = ok && write_le16(f, 1);                               // PCM
+    ok = ok && write_le16(f, static_cast<uint16_t>(num_channels));
+    ok = ok && write_le32(f, static_cast<uint32_t>(sample_rate));
+    ok = ok && write_le32(f, byte_rate);
+    ok = ok && write_le16(f, static_cast<uint16_t>(block_align));
+    ok = ok && write_le16(f, static_cast<uint16_t>(bits_per_sample));
 
     // data sub-chunk
-    fwrite("data", 1, 4, f);
-    write_le32(f, data_size);
+    ok = ok && fwrite("data", 1, 4, f) == 4;
+    ok = ok && write_le32(f, data_size);
 
     // Samples: float32 → int16
-    for (size_t i = 0; i < n; ++i) {
+    for (size_t i = 0; i < n && ok; ++i) {
         float  s = std::max(-1.0f, std::min(1.0f, samples[i]));
         int16_t v = static_cast<int16_t>(s * 32767.0f);
-        write_le16(f, static_cast<uint16_t>(v));
+        ok = ok && write_le16(f, static_cast<uint16_t>(v));
+    }
+
+    if (!ok) {
+        fprintf(stderr, "warn: writeWav: short write to %s: %s\n",
+                path.c_str(), strerror(errno));
     }
 
     fclose(f);
