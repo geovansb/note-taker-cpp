@@ -55,6 +55,23 @@ static NSString* const kTranslateKey = @"translate";
              stringByStandardizingPath];
 }
 
+- (void)showAccessibilityDeniedAlert {
+    NSAlert* alert      = [[NSAlert alloc] init];
+    alert.messageText   = @"Accessibility permission required";
+    alert.informativeText = @"The dictation hotkey (Right Option) requires Accessibility access.\n\n"
+                            @"1. Go to Privacy & Security → Accessibility\n"
+                            @"2. Enable note-taker-bar\n"
+                            @"3. Restart the app\n\n"
+                            @"Recording sessions still work without this permission.";
+    alert.alertStyle = NSAlertStyleWarning;
+    [alert addButtonWithTitle:@"Open System Settings"];
+    [alert addButtonWithTitle:@"Later"];
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+        [[NSWorkspace sharedWorkspace] openURL:
+            [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"]];
+    }
+}
+
 - (void)showMicDeniedAlert {
     NSAlert* alert      = [[NSAlert alloc] init];
     alert.messageText   = @"Microphone access denied";
@@ -139,8 +156,8 @@ static NSString* const kTranslateKey = @"translate";
         }
     );
     if (!tap_ok) {
-        NSLog(@"[note-taker] EventTap not started — Accessibility not granted; "
-              "dictation unavailable until permission is granted and app is relaunched");
+        NSLog(@"[note-taker] EventTap not started — Accessibility not granted");
+        [self showAccessibilityDeniedAlert];
     }
 
     // Load model off the main thread (whisper_init_from_file blocks ~3-5 s).
