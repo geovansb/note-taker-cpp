@@ -22,6 +22,12 @@ public:
 
     void feed(const float* samples, size_t n);
 
+    // Emit the current buffer immediately, regardless of VAD or silence state.
+    // Useful when recording stops and a partial chunk would otherwise be lost.
+    // Returns true if a chunk was emitted (buffer had enough samples), false if
+    // the buffer was empty or below the minimum threshold (~0.5 s).
+    bool forceFlush();
+
 private:
     void flush(std::vector<float>& out);
 

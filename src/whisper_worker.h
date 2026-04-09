@@ -41,6 +41,12 @@ public:
         on_result_ = std::move(cb);
     }
 
+    // Optional: callback invoked once when the queue empties after all pending
+    // session chunks have been processed. Set this before forceFlush() so the
+    // worker can fire it even when no new items arrive after forceFlush.
+    // Cleared after the first invocation. Called on the worker thread.
+    void setOnSessionDone(std::function<void()> cb);
+
     // Load model and start worker thread. Returns false on model load failure.
     bool start();
 
@@ -74,6 +80,7 @@ private:
     int            wav_chunk_idx_    = 0;
 
     std::function<void(const std::string&)> on_result_;
+    std::function<void()>                   on_session_done_;
 
     struct whisper_context* ctx_ = nullptr;
 

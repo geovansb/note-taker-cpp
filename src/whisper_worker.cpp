@@ -54,6 +54,16 @@ void WhisperWorker::enqueue(std::vector<float> chunk, int64_t chunk_start_ms,
     cv_.notify_one();
 }
 
+void WhisperWorker::setOnSessionDone(std::function<void()> cb) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        on_session_done_ = std::move(cb);
+        // Wake the worker in case the queue is already empty — it will check
+        // the callback and fire it without waiting for a new item to arrive.
+        cv_.notify_one();
+    }
+}
+
 void WhisperWorker::stop() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -74,7 +84,20 @@ void WhisperWorker::workerLoop() {
         ChunkItem item;
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] { return stop_flag_ || !queue_.empty(); });
+            cv_.wait(lock, [this] {
+                return stop_flag_ || !queue_.empty() || on_session_done_ != nullptr;
+            });
+
+            // If the queue is empty but on_session_done_ is set, all pending
+            // session chunks have been processed — fire the callback and clear it.
+            if (queue_.empty() && on_session_done_) {
+                auto cb = std::move(on_session_done_);
+                on_session_done_ = nullptr;
+                lock.unlock();
+                cb();
+                continue;
+            }
+
             if (stop_flag_ && queue_.empty()) break;
             item = std::move(queue_.front());
             queue_.pop();
@@ -144,8 +167,20 @@ void WhisperWorker::workerLoop() {
             if (on_result_ && !full_text.empty()) {
                 on_result_(full_text);
             }
-        } else if (output_writer_) {
-            output_writer_->flush();
+        } else {
+            if (output_writer_) output_writer_->flush();
+
+            // After flushing a session chunk, check if the queue is now empty
+            // and a session-done callback is waiting.
+            std::function<void()> done_cb;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (queue_.empty() && on_session_done_) {
+                    done_cb = std::move(on_session_done_);
+                    on_session_done_ = nullptr;
+                }
+            }
+            if (done_cb) done_cb();
         }
     }
 }

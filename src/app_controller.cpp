@@ -21,6 +21,7 @@ static constexpr int MODE_IDLE         = 0;
 static constexpr int MODE_DICTATING    = 1;
 static constexpr int MODE_TRANSCRIBING = 2; // dictation chunk in flight
 static constexpr int MODE_RECORDING    = 3;
+static constexpr int MODE_FINALIZING   = 4; // stop requested; draining worker queue
 
 // ── Impl ──────────────────────────────────────────────────────────────────────
 
@@ -230,13 +231,29 @@ void AppController::startSession() {
 
 void AppController::stopSession() {
     int expected = MODE_RECORDING;
-    if (!impl_->mode.compare_exchange_strong(expected, MODE_IDLE))
+    if (!impl_->mode.compare_exchange_strong(expected, MODE_FINALIZING))
         return;
 
-    impl_->worker->setOutputWriter(nullptr);
-    if (impl_->session_writer) {
-        impl_->session_writer->flush();
-        impl_->session_writer.reset();
-    }
-    impl_->notifyStatus("● Idle");
+    impl_->notifyStatus("⏳ Finalizing…");
+
+    // Register cleanup to run once the worker drains all queued session chunks.
+    // The callback fires on the worker thread; dispatch UI updates to main queue
+    // from within the callback (the caller — AppDelegate — will handle that via
+    // the notifyStatus path which already dispatches to main queue).
+    impl_->worker->setOnSessionDone([this] {
+        impl_->worker->setOutputWriter(nullptr);
+        if (impl_->session_writer) {
+            impl_->session_writer->flush();
+            impl_->session_writer.reset();
+        }
+        impl_->mode.store(MODE_IDLE);
+        impl_->notifyStatus("● Idle");
+    });
+
+    // Flush any partial buffer still in the assembler (audio since last VAD flush).
+    // This enqueues one more chunk to the worker before the queue drains.
+    impl_->assembler->forceFlush();
+    // setOnSessionDone() already notified the worker's cv; if the queue was
+    // already empty (nothing was flushed, nothing was pending) the callback
+    // fires immediately on the next worker loop iteration.
 }

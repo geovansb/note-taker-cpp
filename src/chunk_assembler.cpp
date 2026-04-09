@@ -49,6 +49,19 @@ void ChunkAssembler::feed(const float* samples, size_t n) {
     }
 }
 
+bool ChunkAssembler::forceFlush() {
+    // Require at least ~0.5 s to avoid transcribing near-empty noise buffers.
+    constexpr size_t kMinSamples = CAPTURE_SAMPLE_RATE / 2;
+    std::vector<float> to_emit;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (buffer_.size() < kMinSamples) return false;
+        flush(to_emit);
+    }
+    on_chunk_(std::move(to_emit));
+    return true;
+}
+
 // Called with mutex held. Moves buffer into out and resets state.
 void ChunkAssembler::flush(std::vector<float>& out) {
     out = std::move(buffer_);
