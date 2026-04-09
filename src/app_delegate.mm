@@ -418,10 +418,31 @@ static NSString* const kTranslateKey = @"translate";
     // Must be called on the main thread.
     NSMenuItem* startRec = [_statusItem.menu itemWithTag:2];
     NSMenuItem* stopRec  = [_statusItem.menu itemWithTag:3];
+
     BOOL isIdle      = [status hasPrefix:@"● Idle"];
     BOOL isRecording = [status hasPrefix:@"🔴"];
+
     startRec.enabled = isIdle;
     stopRec.enabled  = isRecording;
+
+    // Show contextual hints when both buttons are disabled (FINALIZING,
+    // TRANSCRIBING, DICTATING) so the user knows something is in progress.
+    if (isIdle) {
+        startRec.title = @"▶  Start Recording";
+        stopRec.title  = @"■  Stop Recording";
+    } else if (isRecording) {
+        startRec.title = @"▶  Start Recording";
+        stopRec.title  = @"■  Stop Recording";
+    } else if ([status hasPrefix:@"⏳ Finalizing"]) {
+        startRec.title = @"⏳ Finalizing, please wait…";
+        stopRec.title  = @"■  Stop Recording";
+    } else if ([status hasPrefix:@"⏺"]) {
+        startRec.title = @"⏺  Dictating… (release key to stop)";
+        stopRec.title  = @"■  Stop Recording";
+    } else if ([status hasPrefix:@"⏳"]) {
+        startRec.title = @"⏳ Processing, please wait…";
+        stopRec.title  = @"■  Stop Recording";
+    }
 
     [self applyIconForStatus:status];
 }
