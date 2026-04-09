@@ -249,7 +249,14 @@ static NSString* const kTranslateKey = @"translate";
 
 - (NSMenu*)buildModelMenu {
     NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Model"];
-    NSArray<NSString*>* models = @[@"large-v3", @"medium", @"base"];
+    NSArray<NSString*>* models = @[
+        @"large-v3",
+        @"large-v3-turbo",
+        @"large-v3-turbo-q5_0",
+        @"large-v3-turbo-q8_0",
+        @"medium",
+        @"base",
+    ];
     for (NSString* m in models) {
         NSString* path   = [self modelPathForKey:m];
         BOOL      exists = [[NSFileManager defaultManager] fileExistsAtPath:path];
