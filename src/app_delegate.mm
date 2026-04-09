@@ -44,16 +44,34 @@ static NSString* const kTranslateKey = @"translate";
     }
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+- (NSString*)modelPathForKey:(NSString*)key {
+    NSString* bundleDir = [[[NSBundle mainBundle] bundlePath]
+                            stringByDeletingLastPathComponent];
+    NSString* modelFile = [NSString stringWithFormat:@"ggml-%@.bin", key];
+    return [[bundleDir stringByAppendingPathComponent:
+             [@"../models/" stringByAppendingString:modelFile]]
+             stringByStandardizingPath];
+}
+
+- (void)showModelMissingAlertForKey:(NSString*)key {
+    NSAlert* alert      = [[NSAlert alloc] init];
+    alert.messageText   = [NSString stringWithFormat:@"Model \"%@\" not found", key];
+    alert.informativeText = [NSString stringWithFormat:
+        @"Download it by running:\n\n"
+        @"    ./scripts/download_model.sh %@\n\n"
+        @"Then restart the app.", key];
+    alert.alertStyle = NSAlertStyleWarning;
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
+}
+
 // ── Controller setup ──────────────────────────────────────────────────────────
 
 - (void)startController {
     // Resolve paths in ObjC context, then hand off to pure-C++ AppController.
-    NSString* bundleDir = [[[NSBundle mainBundle] bundlePath]
-                            stringByDeletingLastPathComponent];
-    NSString* modelFile = [NSString stringWithFormat:@"ggml-%@.bin", _model];
-    NSString* modelNS   = [[bundleDir stringByAppendingPathComponent:
-                            [@"../models/" stringByAppendingString:modelFile]]
-                            stringByStandardizingPath];
+    NSString* modelNS = [self modelPathForKey:_model];
     NSString* notesNS   = [NSHomeDirectory()
                             stringByAppendingPathComponent:@"notes"];
 
@@ -76,6 +94,10 @@ static NSString* const kTranslateKey = @"translate";
             if (!d) return;
             [d setStatusTitle:s];
             [d updateMenuForStatus:s];
+            // Show a prominent alert when the model file is missing at startup.
+            if ([s hasPrefix:@"⚠ Model not found"]) {
+                [d showModelMissingAlertForKey:d->_model];
+            }
         });
     });
 
@@ -229,13 +251,18 @@ static NSString* const kTranslateKey = @"translate";
     NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Model"];
     NSArray<NSString*>* models = @[@"large-v3", @"medium", @"base"];
     for (NSString* m in models) {
-        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:m
+        NSString* path   = [self modelPathForKey:m];
+        BOOL      exists = [[NSFileManager defaultManager] fileExistsAtPath:path];
+        NSString* title  = exists ? m : [m stringByAppendingString:@"  ⚠ not downloaded"];
+        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title
                              action:@selector(selectModel:) keyEquivalent:@""];
         item.representedObject = m;
         item.state   = [m isEqualToString:_model]
                        ? NSControlStateValueOn : NSControlStateValueOff;
-        item.toolTip = [m isEqualToString:_model]
-                       ? nil : @"Requires restart to take effect";
+        item.toolTip = exists
+                       ? @"Requires restart to take effect"
+                       : [NSString stringWithFormat:
+                          @"Run: ./scripts/download_model.sh %@", m];
         [sub addItem:item];
     }
     return sub;
@@ -292,13 +319,20 @@ static NSString* const kTranslateKey = @"translate";
     NSString* m = sender.representedObject;
     if (!m || [m isEqualToString:_model]) return;
 
+    // Block selection if the model file is not on disk.
+    NSString* path = [self modelPathForKey:m];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        [self showModelMissingAlertForKey:m];
+        return;
+    }
+
     _model = m;
     [[NSUserDefaults standardUserDefaults] setObject:m forKey:kModelKey];
 
     for (NSMenuItem* item in sender.menu.itemArray) {
-        BOOL active   = [item.representedObject isEqualToString:m];
-        item.state    = active ? NSControlStateValueOn : NSControlStateValueOff;
-        item.toolTip  = active ? nil : @"Requires restart to take effect";
+        BOOL active  = [item.representedObject isEqualToString:m];
+        item.state   = active ? NSControlStateValueOn : NSControlStateValueOff;
+        item.toolTip = @"Requires restart to take effect";
     }
 }
 
