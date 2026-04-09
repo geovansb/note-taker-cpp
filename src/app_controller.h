@@ -47,6 +47,10 @@ public:
     // next chunk. When true, language is forced to "auto" for best results.
     void setTranslate(bool translate);
 
+    // VAD tuning — changes take effect on the next audio block.
+    void setVadSensitivity(float threshold, float gain);
+    void setSilenceTimeout(float seconds);
+
     // Hotkey callbacks — forwarded from AppDelegate's EventTap (CFRunLoop thread).
     void onHotkeyDown();
     void onHotkeyUp();

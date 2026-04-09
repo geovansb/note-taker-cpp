@@ -97,6 +97,15 @@ void AppController::setTranslate(bool translate) {
     if (impl_->worker) impl_->worker->setTranslate(translate);
 }
 
+void AppController::setVadSensitivity(float threshold, float gain) {
+    impl_->vad.setThreshold(threshold);
+    impl_->vad.setGain(gain);
+}
+
+void AppController::setSilenceTimeout(float seconds) {
+    if (impl_->assembler) impl_->assembler->setSilenceTimeout(seconds);
+}
+
 bool AppController::isRecording() const {
     return impl_->mode.load(std::memory_order_relaxed) == MODE_RECORDING;
 }

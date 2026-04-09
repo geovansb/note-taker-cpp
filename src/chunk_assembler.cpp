@@ -35,7 +35,7 @@ void ChunkAssembler::feed(const float* samples, size_t n) {
             float silence_s = static_cast<float>(silence_samples_) / CAPTURE_SAMPLE_RATE;
             float min_s     = static_cast<float>(MIN_CHUNK_MS) / 1000.0f;
 
-            bool silence_flush = (silence_s >= SILENCE_TIMEOUT_S && total_s >= min_s);
+            bool silence_flush = (silence_s >= silence_timeout_s_ && total_s >= min_s);
             bool hard_flush    = (total_s >= max_chunk_s_);
 
             if (silence_flush || hard_flush) {

@@ -22,6 +22,9 @@ public:
 
     void feed(const float* samples, size_t n);
 
+    void setSilenceTimeout(float seconds) { silence_timeout_s_ = seconds; }
+    float silenceTimeout() const { return silence_timeout_s_; }
+
     // Emit the current buffer immediately, regardless of VAD or silence state.
     // Useful when recording stops and a partial chunk would otherwise be lost.
     // Returns true if a chunk was emitted (buffer had enough samples), false if
@@ -33,6 +36,7 @@ private:
 
     Vad&        vad_;
     float       max_chunk_s_;
+    float       silence_timeout_s_ = 5.0f;  // default SILENCE_TIMEOUT_S
     OnChunkCb   on_chunk_;
 
     enum class State { LISTENING, RECORDING };

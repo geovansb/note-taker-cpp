@@ -8,6 +8,8 @@ static NSString* const kLangKey      = @"language";
 static NSString* const kModelKey     = @"model";
 static NSString* const kTranslateKey = @"translate";
 static NSString* const kHotkeyKey    = @"hotkey_keycode";
+static NSString* const kSensitivityKey = @"vad_sensitivity";
+static NSString* const kSilenceKey     = @"silence_timeout";
 
 @implementation AppDelegate {
     NSStatusItem*  _statusItem;
@@ -27,10 +29,12 @@ static NSString* const kHotkeyKey    = @"hotkey_keycode";
 
 - (void)applicationDidFinishLaunching:(NSNotification*)__unused note {
     [[NSUserDefaults standardUserDefaults] registerDefaults:@{
-        kLangKey:      @"auto",
-        kModelKey:     @"large-v3",
-        kTranslateKey: @NO,
-        kHotkeyKey:    @(kVK_RightOption),
+        kLangKey:        @"auto",
+        kModelKey:       @"large-v3",
+        kTranslateKey:   @NO,
+        kHotkeyKey:      @(kVK_RightOption),
+        kSensitivityKey: @"medium",
+        kSilenceKey:     @5.0,
     }];
     _language    = [[NSUserDefaults standardUserDefaults] stringForKey:kLangKey];
     _model       = [[NSUserDefaults standardUserDefaults] stringForKey:kModelKey];
@@ -123,6 +127,8 @@ static NSString* const kHotkeyKey    = @"hotkey_keycode";
 
     _controller = new AppController(modelPath, /*use_metal=*/true, language, _outputDir);
     if (translate) _controller->setTranslate(true);
+    [self applyVadSensitivity:[[NSUserDefaults standardUserDefaults] stringForKey:kSensitivityKey]];
+    _controller->setSilenceTimeout((float)[[NSUserDefaults standardUserDefaults] doubleForKey:kSilenceKey]);
 
     _controller->setOnStatusChange([weakSelf](std::string status) {
         // Called from any thread — dispatch UI updates to main queue.
@@ -282,6 +288,19 @@ static NSString* const kHotkeyKey    = @"hotkey_keycode";
 
     [menu addItem:[NSMenuItem separatorItem]];
 
+    // VAD tuning
+    NSMenuItem* sensitivityParent = [[NSMenuItem alloc] initWithTitle:@"VAD Sensitivity"
+                                      action:nil keyEquivalent:@""];
+    sensitivityParent.submenu = [self buildSensitivityMenu];
+    [menu addItem:sensitivityParent];
+
+    NSMenuItem* silenceParent = [[NSMenuItem alloc] initWithTitle:@"Silence Timeout"
+                                  action:nil keyEquivalent:@""];
+    silenceParent.submenu = [self buildSilenceTimeoutMenu];
+    [menu addItem:silenceParent];
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
     [menu addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
 
     return menu;
@@ -319,22 +338,15 @@ static NSString* const kHotkeyKey    = @"hotkey_keycode";
         @"large-v3-q5_0",
     ];
 
-    // Header: active model (informational, not selectable)
-    NSMenuItem* active = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Active: %@", _model]
-                           action:nil keyEquivalent:@""];
-    active.enabled = NO;
-    [sub addItem:active];
-    [sub addItem:[NSMenuItem separatorItem]];
-
-    // Selectable model list
+    // Selectable model list (active model shown with checkmark)
     for (NSString* m in models) {
-        if ([m isEqualToString:_model]) continue;  // skip the active one
         NSString* path   = [self modelPathForKey:m];
         BOOL      exists = [[NSFileManager defaultManager] fileExistsAtPath:path];
         NSString* title  = exists ? m : [m stringByAppendingString:@"  ⚠ not downloaded"];
         NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title
                              action:@selector(selectModel:) keyEquivalent:@""];
         item.representedObject = m;
+        item.state = [m isEqualToString:_model] ? NSControlStateValueOn : NSControlStateValueOff;
         item.toolTip = exists
                        ? @"Requires restart to take effect"
                        : [NSString stringWithFormat:@"Run: ./scripts/download_model.sh %@", m];
@@ -361,6 +373,49 @@ static NSString* const kHotkeyKey    = @"hotkey_keycode";
                              action:@selector(selectHotkey:) keyEquivalent:@""];
         item.tag   = code;
         item.state = (code == _hotkeyCode) ? NSControlStateValueOn : NSControlStateValueOff;
+        [sub addItem:item];
+    }
+    return sub;
+}
+
+- (void)applyVadSensitivity:(NSString*)key {
+    // threshold / gain pairs: lower threshold + higher gain = more sensitive
+    float threshold = 0.015f, gain = 1.3f; // medium (default)
+    if ([key isEqualToString:@"low"]) {
+        threshold = 0.025f; gain = 1.0f;
+    } else if ([key isEqualToString:@"high"]) {
+        threshold = 0.008f; gain = 1.8f;
+    }
+    if (_controller) _controller->setVadSensitivity(threshold, gain);
+}
+
+- (NSMenu*)buildSensitivityMenu {
+    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Sensitivity"];
+    NSString* current = [[NSUserDefaults standardUserDefaults] stringForKey:kSensitivityKey];
+    NSArray<NSString*>* keys   = @[@"low", @"medium", @"high"];
+    NSArray<NSString*>* labels = @[@"Low", @"Medium", @"High"];
+    for (NSUInteger i = 0; i < keys.count; i++) {
+        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:labels[i]
+                             action:@selector(selectSensitivity:) keyEquivalent:@""];
+        item.representedObject = keys[i];
+        item.state = [keys[i] isEqualToString:current]
+                     ? NSControlStateValueOn : NSControlStateValueOff;
+        [sub addItem:item];
+    }
+    return sub;
+}
+
+- (NSMenu*)buildSilenceTimeoutMenu {
+    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Silence Timeout"];
+    float current = (float)[[NSUserDefaults standardUserDefaults] doubleForKey:kSilenceKey];
+    float values[] = { 2.0f, 3.0f, 5.0f, 8.0f, 10.0f };
+    for (float v : values) {
+        NSString* title = [NSString stringWithFormat:@"%.0fs", v];
+        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title
+                             action:@selector(selectSilenceTimeout:) keyEquivalent:@""];
+        item.representedObject = @(v);
+        item.state = (fabsf(v - current) < 0.1f)
+                     ? NSControlStateValueOn : NSControlStateValueOff;
         [sub addItem:item];
     }
     return sub;
@@ -460,6 +515,26 @@ static NSString* const kHotkeyKey    = @"hotkey_keycode";
     if (modelParent) {
         modelParent.title   = [NSString stringWithFormat:@"Model — %@", m];
         modelParent.submenu = [self buildModelMenu];
+    }
+}
+
+- (void)selectSensitivity:(NSMenuItem*)sender {
+    NSString* key = sender.representedObject;
+    [[NSUserDefaults standardUserDefaults] setObject:key forKey:kSensitivityKey];
+    [self applyVadSensitivity:key];
+    for (NSMenuItem* item in sender.menu.itemArray) {
+        item.state = [item.representedObject isEqualToString:key]
+                     ? NSControlStateValueOn : NSControlStateValueOff;
+    }
+}
+
+- (void)selectSilenceTimeout:(NSMenuItem*)sender {
+    float val = [sender.representedObject floatValue];
+    [[NSUserDefaults standardUserDefaults] setDouble:val forKey:kSilenceKey];
+    if (_controller) _controller->setSilenceTimeout(val);
+    for (NSMenuItem* item in sender.menu.itemArray) {
+        item.state = (fabsf([item.representedObject floatValue] - val) < 0.1f)
+                     ? NSControlStateValueOn : NSControlStateValueOff;
     }
 }
 
