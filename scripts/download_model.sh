@@ -40,6 +40,8 @@ min_size_for_model() {
         large-v3-turbo-q5_0)    echo 500000000  ;;  # ~547 MB
         large-v3-turbo-q8_0)    echo 820000000  ;;  # ~874 MB
         large-v3-turbo*)        echo 750000000  ;;  # ~809 MB
+        large-v3-q5_0)          echo 1000000000 ;;  # ~1.1 GB
+        large-v3-q8_0)          echo 1600000000 ;;  # ~1.7 GB
         large*)                 echo 3000000000 ;;  # ~3.1 GB
         *)                      echo 10000000   ;;  # 10 MB default
     esac
