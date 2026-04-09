@@ -51,6 +51,10 @@ public:
     // chunk processed. Pass "auto" to restore automatic detection.
     void setLanguage(const std::string& lang);
 
+    // Enable/disable translation to English at runtime. When true, output is
+    // always in English regardless of the spoken language.
+    void setTranslate(bool translate);
+
     // Load model and start worker thread. Returns false on model load failure.
     bool start();
 

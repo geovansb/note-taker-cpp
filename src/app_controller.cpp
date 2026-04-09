@@ -93,6 +93,10 @@ void AppController::setLanguage(const std::string& lang) {
     impl_->language = lang;
 }
 
+void AppController::setTranslate(bool translate) {
+    if (impl_->worker) impl_->worker->setTranslate(translate);
+}
+
 bool AppController::isRecording() const {
     return impl_->mode.load(std::memory_order_relaxed) == MODE_RECORDING;
 }

@@ -59,6 +59,11 @@ void WhisperWorker::setLanguage(const std::string& lang) {
     language_ = lang;
 }
 
+void WhisperWorker::setTranslate(bool translate) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    translate_ = translate;
+}
+
 void WhisperWorker::setOnSessionDone(std::function<void()> cb) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -88,6 +93,7 @@ void WhisperWorker::workerLoop() {
     while (true) {
         ChunkItem item;
         std::string lang;
+        bool        do_translate = false;
         {
             std::unique_lock<std::mutex> lock(mutex_);
             cv_.wait(lock, [this] {
@@ -105,9 +111,10 @@ void WhisperWorker::workerLoop() {
             }
 
             if (stop_flag_ && queue_.empty()) break;
-            item = std::move(queue_.front());
+            item         = std::move(queue_.front());
             queue_.pop();
-            lang = language_;   // snapshot under mutex; setLanguage() is safe any time
+            lang         = language_;   // snapshot under mutex
+            do_translate = translate_;
         }
 
         // Optional WAV save — before transcription so it's always complete.
@@ -123,7 +130,7 @@ void WhisperWorker::workerLoop() {
             whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
 
         params.language         = lang.empty() ? "auto" : lang.c_str();
-        params.translate        = translate_;
+        params.translate        = do_translate;
         params.no_context       = true;
         params.print_progress   = false;
         params.print_realtime   = false;

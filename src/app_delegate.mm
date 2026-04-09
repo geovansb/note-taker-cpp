@@ -3,8 +3,9 @@
 #include "event_tap.h"
 #include "text_injector.h"
 
-static NSString* const kLangKey  = @"language";
-static NSString* const kModelKey = @"model";
+static NSString* const kLangKey      = @"language";
+static NSString* const kModelKey     = @"model";
+static NSString* const kTranslateKey = @"translate";
 
 @implementation AppDelegate {
     NSStatusItem*  _statusItem;
@@ -23,11 +24,12 @@ static NSString* const kModelKey = @"model";
 
 - (void)applicationDidFinishLaunching:(NSNotification*)__unused note {
     [[NSUserDefaults standardUserDefaults] registerDefaults:@{
-        kLangKey:  @"auto",
-        kModelKey: @"large-v3",
+        kLangKey:      @"auto",
+        kModelKey:     @"large-v3",
+        kTranslateKey: @NO,
     }];
-    _language = [[NSUserDefaults standardUserDefaults] stringForKey:kLangKey];
-    _model    = [[NSUserDefaults standardUserDefaults] stringForKey:kModelKey];
+    _language  = [[NSUserDefaults standardUserDefaults] stringForKey:kLangKey];
+    _model     = [[NSUserDefaults standardUserDefaults] stringForKey:kModelKey];
 
     [self setupStatusItem];
     [self startController];
@@ -61,7 +63,10 @@ static NSString* const kModelKey = @"model";
 
     __weak AppDelegate* weakSelf = self;
 
+    bool translate = [[NSUserDefaults standardUserDefaults] boolForKey:kTranslateKey];
+
     _controller = new AppController(modelPath, /*use_metal=*/true, language, _outputDir);
+    if (translate) _controller->setTranslate(true);
 
     _controller->setOnStatusChange([weakSelf](std::string status) {
         // Called from any thread — dispatch UI updates to main queue.
@@ -183,6 +188,14 @@ static NSString* const kModelKey = @"model";
     langParent.submenu = [self buildLanguageMenu];
     [menu addItem:langParent];
 
+    // tag 5 — Translate to English toggle
+    BOOL translateOn = [[NSUserDefaults standardUserDefaults] boolForKey:kTranslateKey];
+    NSMenuItem* translateItem = [[NSMenuItem alloc] initWithTitle:@"Translate to English"
+                                  action:@selector(toggleTranslate:) keyEquivalent:@""];
+    translateItem.tag   = 5;
+    translateItem.state = translateOn ? NSControlStateValueOn : NSControlStateValueOff;
+    [menu addItem:translateItem];
+
     // Model submenu
     NSMenuItem* modelParent = [[NSMenuItem alloc] initWithTitle:@"Model"
                                 action:nil keyEquivalent:@""];
@@ -247,6 +260,13 @@ static NSString* const kModelKey = @"model";
                                                         error:nil];
     }
     [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:dir]];
+}
+
+- (void)toggleTranslate:(NSMenuItem*)sender {
+    BOOL nowOn = (sender.state == NSControlStateValueOff);
+    sender.state = nowOn ? NSControlStateValueOn : NSControlStateValueOff;
+    [[NSUserDefaults standardUserDefaults] setBool:nowOn forKey:kTranslateKey];
+    if (_controller) _controller->setTranslate(nowOn);
 }
 
 - (void)selectLanguage:(NSMenuItem*)sender {

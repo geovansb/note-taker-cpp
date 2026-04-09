@@ -43,6 +43,10 @@ public:
     // Pass "auto" to restore automatic detection.
     void setLanguage(const std::string& lang);
 
+    // Enable/disable translation to English at runtime. Takes effect on the
+    // next chunk. When true, language is forced to "auto" for best results.
+    void setTranslate(bool translate);
+
     // Hotkey callbacks — forwarded from AppDelegate's EventTap (CFRunLoop thread).
     void onHotkeyDown();
     void onHotkeyUp();
