@@ -3,11 +3,16 @@
 #include "event_tap.h"
 #include "text_injector.h"
 
+static NSString* const kLangKey  = @"language";
+static NSString* const kModelKey = @"model";
+
 @implementation AppDelegate {
     NSStatusItem*  _statusItem;
     AppController* _controller;   // owned; stopped and deleted in applicationWillTerminate:
     EventTap       _eventTap;     // owned; lives on main thread, forwards to controller
     std::string    _outputDir;
+    NSString*      _language;
+    NSString*      _model;
 }
 
 // ── NSApplicationDelegate ─────────────────────────────────────────────────────
@@ -17,6 +22,13 @@
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification*)__unused note {
+    [[NSUserDefaults standardUserDefaults] registerDefaults:@{
+        kLangKey:  @"auto",
+        kModelKey: @"large-v3",
+    }];
+    _language = [[NSUserDefaults standardUserDefaults] stringForKey:kLangKey];
+    _model    = [[NSUserDefaults standardUserDefaults] stringForKey:kModelKey];
+
     [self setupStatusItem];
     [self startController];
 }
@@ -36,18 +48,20 @@
     // Resolve paths in ObjC context, then hand off to pure-C++ AppController.
     NSString* bundleDir = [[[NSBundle mainBundle] bundlePath]
                             stringByDeletingLastPathComponent];
+    NSString* modelFile = [NSString stringWithFormat:@"ggml-%@.bin", _model];
     NSString* modelNS   = [[bundleDir stringByAppendingPathComponent:
-                            @"../models/ggml-large-v3.bin"]
+                            [@"../models/" stringByAppendingString:modelFile]]
                             stringByStandardizingPath];
     NSString* notesNS   = [NSHomeDirectory()
                             stringByAppendingPathComponent:@"notes"];
 
     std::string modelPath = std::string([modelNS UTF8String]);
+    std::string language  = std::string([_language UTF8String]);
     _outputDir            = std::string([notesNS UTF8String]);
 
     __weak AppDelegate* weakSelf = self;
 
-    _controller = new AppController(modelPath, /*use_metal=*/true, "auto", _outputDir);
+    _controller = new AppController(modelPath, /*use_metal=*/true, language, _outputDir);
 
     _controller->setOnStatusChange([weakSelf](std::string status) {
         // Called from any thread — dispatch UI updates to main queue.
@@ -98,15 +112,7 @@
     _statusItem = [[NSStatusBar systemStatusBar]
                     statusItemWithLength:NSVariableStatusItemLength];
 
-    NSImage* img = [NSImage imageWithSystemSymbolName:@"mic.fill"
-                              accessibilityDescription:@"note-taker"];
-    if (img) {
-        [img setTemplate:YES];
-        _statusItem.button.image = img;
-    } else {
-        _statusItem.button.title = @"NT";
-    }
-
+    [self applyIconForStatus:@"● Idle"];
     _statusItem.menu = [self buildMenu];
 
     // macOS Tahoe 26+: warn if the system releases the status item because
@@ -171,9 +177,55 @@
 
     [menu addItem:[NSMenuItem separatorItem]];
 
+    // Language submenu
+    NSMenuItem* langParent = [[NSMenuItem alloc] initWithTitle:@"Language"
+                               action:nil keyEquivalent:@""];
+    langParent.submenu = [self buildLanguageMenu];
+    [menu addItem:langParent];
+
+    // Model submenu
+    NSMenuItem* modelParent = [[NSMenuItem alloc] initWithTitle:@"Model"
+                                action:nil keyEquivalent:@""];
+    modelParent.submenu = [self buildModelMenu];
+    [menu addItem:modelParent];
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
     [menu addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
 
     return menu;
+}
+
+- (NSMenu*)buildLanguageMenu {
+    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Language"];
+    NSArray<NSString*>* keys   = @[@"auto", @"pt", @"en", @"es", @"fr", @"de"];
+    NSArray<NSString*>* labels = @[@"Auto", @"Português", @"English",
+                                    @"Español", @"Français", @"Deutsch"];
+    for (NSUInteger i = 0; i < keys.count; i++) {
+        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:labels[i]
+                             action:@selector(selectLanguage:) keyEquivalent:@""];
+        item.representedObject = keys[i];
+        item.state = [keys[i] isEqualToString:_language]
+                     ? NSControlStateValueOn : NSControlStateValueOff;
+        [sub addItem:item];
+    }
+    return sub;
+}
+
+- (NSMenu*)buildModelMenu {
+    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Model"];
+    NSArray<NSString*>* models = @[@"large-v3", @"medium", @"base"];
+    for (NSString* m in models) {
+        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:m
+                             action:@selector(selectModel:) keyEquivalent:@""];
+        item.representedObject = m;
+        item.state   = [m isEqualToString:_model]
+                       ? NSControlStateValueOn : NSControlStateValueOff;
+        item.toolTip = [m isEqualToString:_model]
+                       ? nil : @"Requires restart to take effect";
+        [sub addItem:item];
+    }
+    return sub;
 }
 
 // ── Menu actions ──────────────────────────────────────────────────────────────
@@ -197,12 +249,61 @@
     [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:dir]];
 }
 
+- (void)selectLanguage:(NSMenuItem*)sender {
+    NSString* key = sender.representedObject;
+    if (!key || [key isEqualToString:_language]) return;
+
+    _language = key;
+    [[NSUserDefaults standardUserDefaults] setObject:key forKey:kLangKey];
+
+    for (NSMenuItem* item in sender.menu.itemArray) {
+        item.state = [item.representedObject isEqualToString:key]
+                     ? NSControlStateValueOn : NSControlStateValueOff;
+    }
+}
+
+- (void)selectModel:(NSMenuItem*)sender {
+    NSString* m = sender.representedObject;
+    if (!m || [m isEqualToString:_model]) return;
+
+    _model = m;
+    [[NSUserDefaults standardUserDefaults] setObject:m forKey:kModelKey];
+
+    for (NSMenuItem* item in sender.menu.itemArray) {
+        BOOL active   = [item.representedObject isEqualToString:m];
+        item.state    = active ? NSControlStateValueOn : NSControlStateValueOff;
+        item.toolTip  = active ? nil : @"Requires restart to take effect";
+    }
+}
+
 // ── Status updates ────────────────────────────────────────────────────────────
 
 - (void)setStatusTitle:(NSString*)title {
     // Must be called on the main thread.
     NSMenuItem* item = [_statusItem.menu itemWithTag:1];
     if (item) item.title = title;
+}
+
+- (void)applyIconForStatus:(NSString*)status {
+    NSString* symbolName;
+    if ([status hasPrefix:@"🔴"]) {
+        symbolName = @"record.circle.fill";
+    } else if ([status hasPrefix:@"⏺"]) {
+        symbolName = @"mic";
+    } else if ([status hasPrefix:@"⏳"]) {
+        symbolName = @"waveform";
+    } else {
+        symbolName = @"mic.fill";   // ● Idle or ⚠ error states
+    }
+
+    NSImage* img = [NSImage imageWithSystemSymbolName:symbolName
+                              accessibilityDescription:@"note-taker"];
+    if (img) {
+        [img setTemplate:YES];
+        _statusItem.button.image = img;
+    } else {
+        _statusItem.button.title = @"NT";
+    }
 }
 
 - (void)updateMenuForStatus:(NSString*)status {
@@ -213,6 +314,8 @@
     BOOL isRecording = [status hasPrefix:@"🔴"];
     startRec.enabled = isIdle;
     stopRec.enabled  = isRecording;
+
+    [self applyIconForStatus:status];
 }
 
 @end
