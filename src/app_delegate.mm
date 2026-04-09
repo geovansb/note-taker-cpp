@@ -218,21 +218,24 @@ static NSString* const kTranslateKey = @"translate";
 
     // tag 2 — Start Recording (enabled when IDLE)
     NSMenuItem* startRec = [[NSMenuItem alloc] initWithTitle:@"▶  Start Recording"
-                             action:@selector(startRecording:) keyEquivalent:@""];
+                             action:@selector(startRecording:) keyEquivalent:@"r"];
+    startRec.keyEquivalentModifierMask = NSEventModifierFlagCommand;
     startRec.tag     = 2;
     startRec.enabled = NO;  // enabled once model loads (updateMenuForStatus:)
     [menu addItem:startRec];
 
-    // tag 3 — Stop Recording (enabled when RECORDING)
+    // tag 3 — Stop Recording (enabled when RECORDING)  Cmd+Shift+R
     NSMenuItem* stopRec = [[NSMenuItem alloc] initWithTitle:@"■  Stop Recording"
-                            action:@selector(stopRecording:) keyEquivalent:@""];
+                            action:@selector(stopRecording:) keyEquivalent:@"r"];
+    stopRec.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
     stopRec.tag     = 3;
     stopRec.enabled = NO;
     [menu addItem:stopRec];
 
-    // tag 4 — Open Notes Folder
+    // tag 4 — Open Notes Folder  Cmd+O
     NSMenuItem* openFolder = [[NSMenuItem alloc] initWithTitle:@"Open Notes Folder"
-                               action:@selector(openNotesFolder:) keyEquivalent:@""];
+                               action:@selector(openNotesFolder:) keyEquivalent:@"o"];
+    openFolder.keyEquivalentModifierMask = NSEventModifierFlagCommand;
     openFolder.tag     = 4;
     openFolder.enabled = YES;
     [menu addItem:openFolder];
