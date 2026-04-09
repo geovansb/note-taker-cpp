@@ -394,24 +394,33 @@ static NSString* const kTranslateKey = @"translate";
 
 - (void)applyIconForStatus:(NSString*)status {
     NSString* symbolName;
+    NSString* a11yLabel;
     if ([status hasPrefix:@"🔴"]) {
         symbolName = @"record.circle.fill";
+        a11yLabel  = @"note-taker: recording session";
     } else if ([status hasPrefix:@"⏺"]) {
         symbolName = @"mic";
+        a11yLabel  = @"note-taker: dictating";
     } else if ([status hasPrefix:@"⏳"]) {
         symbolName = @"waveform";
+        a11yLabel  = @"note-taker: processing";
+    } else if ([status hasPrefix:@"⚠"]) {
+        symbolName = @"mic.fill";
+        a11yLabel  = @"note-taker: error";
     } else {
-        symbolName = @"mic.fill";   // ● Idle or ⚠ error states
+        symbolName = @"mic.fill";
+        a11yLabel  = @"note-taker: idle";
     }
 
     NSImage* img = [NSImage imageWithSystemSymbolName:symbolName
-                              accessibilityDescription:@"note-taker"];
+                              accessibilityDescription:a11yLabel];
     if (img) {
         [img setTemplate:YES];
         _statusItem.button.image = img;
     } else {
         _statusItem.button.title = @"NT";
     }
+    _statusItem.button.accessibilityLabel = a11yLabel;
 }
 
 - (void)updateMenuForStatus:(NSString*)status {
