@@ -2,10 +2,12 @@
 #include "app_controller.h"
 #include "event_tap.h"
 #include "text_injector.h"
+#include <Carbon/Carbon.h>
 
 static NSString* const kLangKey      = @"language";
 static NSString* const kModelKey     = @"model";
 static NSString* const kTranslateKey = @"translate";
+static NSString* const kHotkeyKey    = @"hotkey_keycode";
 
 @implementation AppDelegate {
     NSStatusItem*  _statusItem;
@@ -14,6 +16,7 @@ static NSString* const kTranslateKey = @"translate";
     std::string    _outputDir;
     NSString*      _language;
     NSString*      _model;
+    int            _hotkeyCode;
 }
 
 // ── NSApplicationDelegate ─────────────────────────────────────────────────────
@@ -27,9 +30,11 @@ static NSString* const kTranslateKey = @"translate";
         kLangKey:      @"auto",
         kModelKey:     @"large-v3",
         kTranslateKey: @NO,
+        kHotkeyKey:    @(kVK_RightOption),
     }];
-    _language  = [[NSUserDefaults standardUserDefaults] stringForKey:kLangKey];
-    _model     = [[NSUserDefaults standardUserDefaults] stringForKey:kModelKey];
+    _language    = [[NSUserDefaults standardUserDefaults] stringForKey:kLangKey];
+    _model       = [[NSUserDefaults standardUserDefaults] stringForKey:kModelKey];
+    _hotkeyCode  = (int)[[NSUserDefaults standardUserDefaults] integerForKey:kHotkeyKey];
 
     [self setupStatusItem];
     [self startController];
@@ -145,6 +150,7 @@ static NSString* const kTranslateKey = @"translate";
 
     // EventTap must start on the main thread so AXIsProcessTrustedWithOptions
     // can show the system Accessibility dialog (UI operations require main thread).
+    _eventTap.setHotkey(_hotkeyCode);
     bool tap_ok = _eventTap.start(
         [weakSelf] {
             AppDelegate* d = weakSelf;
@@ -209,8 +215,10 @@ static NSString* const kTranslateKey = @"translate";
 
     [menu addItem:[NSMenuItem separatorItem]];
 
-    NSMenuItem* hint = [[NSMenuItem alloc] initWithTitle:@"Hold ⌥ Right Option to dictate"
+    NSMenuItem* hint = [[NSMenuItem alloc] initWithTitle:
+        [NSString stringWithFormat:@"Hold %@ to dictate", [self labelForKeycode:_hotkeyCode]]
                          action:nil keyEquivalent:@""];
+    hint.tag     = 7;
     hint.enabled = NO;
     [menu addItem:hint];
 
@@ -262,6 +270,12 @@ static NSString* const kTranslateKey = @"translate";
     modelParent.tag     = 6;
     modelParent.submenu = [self buildModelMenu];
     [menu addItem:modelParent];
+
+    // Hotkey submenu
+    NSMenuItem* hotkeyParent = [[NSMenuItem alloc] initWithTitle:@"Dictation Hotkey"
+                                 action:nil keyEquivalent:@""];
+    hotkeyParent.submenu = [self buildHotkeyMenu];
+    [menu addItem:hotkeyParent];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -318,6 +332,29 @@ static NSString* const kTranslateKey = @"translate";
     return sub;
 }
 
+- (NSString*)labelForKeycode:(int)code {
+    switch (code) {
+        case kVK_RightOption:  return @"Right Option (⌥)";
+        case kVK_Option:       return @"Left Option (⌥)";
+        case kVK_RightCommand: return @"Right Command (⌘)";
+        case kVK_Function:     return @"Fn";
+        default:               return [NSString stringWithFormat:@"Key 0x%02X", code];
+    }
+}
+
+- (NSMenu*)buildHotkeyMenu {
+    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Hotkey"];
+    int codes[] = { kVK_RightOption, kVK_Option, kVK_RightCommand, kVK_Function };
+    for (int code : codes) {
+        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:[self labelForKeycode:code]
+                             action:@selector(selectHotkey:) keyEquivalent:@""];
+        item.tag   = code;
+        item.state = (code == _hotkeyCode) ? NSControlStateValueOn : NSControlStateValueOff;
+        [sub addItem:item];
+    }
+    return sub;
+}
+
 // ── Menu actions ──────────────────────────────────────────────────────────────
 
 - (void)startRecording:(id)__unused sender {
@@ -362,6 +399,27 @@ static NSString* const kTranslateKey = @"translate";
     for (NSMenuItem* item in sender.menu.itemArray) {
         item.state = [item.representedObject isEqualToString:key]
                      ? NSControlStateValueOn : NSControlStateValueOff;
+    }
+}
+
+- (void)selectHotkey:(NSMenuItem*)sender {
+    int code = (int)sender.tag;
+    if (code == _hotkeyCode) return;
+
+    _hotkeyCode = code;
+    [[NSUserDefaults standardUserDefaults] setInteger:code forKey:kHotkeyKey];
+    _eventTap.setHotkey(code);
+
+    // Update checkmarks
+    for (NSMenuItem* item in sender.menu.itemArray) {
+        item.state = (item.tag == code) ? NSControlStateValueOn : NSControlStateValueOff;
+    }
+
+    // Update the hint text (tag 7)
+    NSMenuItem* hint = [_statusItem.menu itemWithTag:7];
+    if (hint) {
+        hint.title = [NSString stringWithFormat:@"Hold %@ to dictate",
+                      [self labelForKeycode:code]];
     }
 }
 

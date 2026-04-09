@@ -35,10 +35,23 @@ static CGEventRef event_tap_callback(CGEventTapProxy __unused proxy,
     if (keycode != impl->hotkey) return event;
 
     if (type == kCGEventFlagsChanged) {
-        // Modifier keys (Option, Shift, Ctrl, Cmd) use FlagsChanged instead of
-        // KeyDown/KeyUp. Determine pressed vs released from the flag bit.
+        // Modifier keys use FlagsChanged instead of KeyDown/KeyUp.
+        // Determine pressed vs released from the appropriate flag bit.
         CGEventFlags flags = CGEventGetFlags(event);
-        bool pressed = (flags & kCGEventFlagMaskAlternate) != 0;
+        CGEventFlags mask  = 0;
+        switch (keycode) {
+            case kVK_RightOption:  // fallthrough
+            case kVK_Option:       mask = kCGEventFlagMaskAlternate; break;
+            case kVK_RightCommand: // fallthrough
+            case kVK_Command:      mask = kCGEventFlagMaskCommand;   break;
+            case kVK_RightControl: // fallthrough
+            case kVK_Control:      mask = kCGEventFlagMaskControl;   break;
+            case kVK_RightShift:   // fallthrough
+            case kVK_Shift:        mask = kCGEventFlagMaskShift;     break;
+            case kVK_Function:     mask = kCGEventFlagMaskSecondaryFn; break;
+            default:               mask = 0; break;
+        }
+        bool pressed = mask != 0 && (flags & mask) != 0;
         if (pressed  && impl->on_down) impl->on_down();
         if (!pressed && impl->on_up)   impl->on_up();
     } else {
