@@ -6,7 +6,7 @@
 
 static NSString* const kLangKey      = @"language";
 static NSString* const kModelKey     = @"model";
-static NSString* const kTranslateKey = @"translate";
+
 static NSString* const kHotkeyKey    = @"hotkey_keycode";
 static NSString* const kSensitivityKey = @"vad_sensitivity";
 static NSString* const kSilenceKey     = @"silence_timeout";
@@ -34,7 +34,6 @@ static NSString* const kOutputDirKey   = @"output_dir";
     [[NSUserDefaults standardUserDefaults] registerDefaults:@{
         kLangKey:        @"auto",
         kModelKey:       @"large-v3",
-        kTranslateKey:   @NO,
         kHotkeyKey:      @(kVK_RightOption),
         kSensitivityKey: @"medium",
         kSilenceKey:     @5.0,
@@ -127,10 +126,7 @@ static NSString* const kOutputDirKey   = @"output_dir";
 
     __weak AppDelegate* weakSelf = self;
 
-    bool translate = [[NSUserDefaults standardUserDefaults] boolForKey:kTranslateKey];
-
     _controller = new AppController(modelPath, /*use_metal=*/true, language, _outputDir);
-    if (translate) _controller->setTranslate(true);
     [self applyVadSensitivity:[[NSUserDefaults standardUserDefaults] stringForKey:kSensitivityKey]];
     _controller->setSilenceTimeout((float)[[NSUserDefaults standardUserDefaults] doubleForKey:kSilenceKey]);
 
@@ -265,14 +261,6 @@ static NSString* const kOutputDirKey   = @"output_dir";
     langParent.tag     = 8;
     langParent.submenu = [self buildLanguageMenu];
     [menu addItem:langParent];
-
-    // tag 5 — Translate to English toggle
-    BOOL translateOn = [[NSUserDefaults standardUserDefaults] boolForKey:kTranslateKey];
-    NSMenuItem* translateItem = [[NSMenuItem alloc] initWithTitle:@"Translate to English"
-                                  action:@selector(toggleTranslate:) keyEquivalent:@""];
-    translateItem.tag   = 5;
-    translateItem.state = translateOn ? NSControlStateValueOn : NSControlStateValueOff;
-    [menu addItem:translateItem];
 
     // tag 6 — Model submenu (title shows loaded model, rebuilt in selectModel:)
     NSMenuItem* modelParent = [[NSMenuItem alloc] initWithTitle:
@@ -489,13 +477,6 @@ static NSString* const kOutputDirKey   = @"output_dir";
         [[NSUserDefaults standardUserDefaults] setObject:path forKey:kOutputDirKey];
         if (_controller) _controller->setOutputDir(_outputDir);
     }
-}
-
-- (void)toggleTranslate:(NSMenuItem*)sender {
-    BOOL nowOn = (sender.state == NSControlStateValueOff);
-    sender.state = nowOn ? NSControlStateValueOn : NSControlStateValueOff;
-    [[NSUserDefaults standardUserDefaults] setBool:nowOn forKey:kTranslateKey];
-    if (_controller) _controller->setTranslate(nowOn);
 }
 
 - (void)selectLanguage:(NSMenuItem*)sender {

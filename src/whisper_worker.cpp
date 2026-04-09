@@ -132,10 +132,6 @@ void WhisperWorker::workerLoop() {
 
         params.language         = lang.empty() ? "auto" : lang.c_str();
         params.translate        = do_translate;
-
-        fprintf(stderr, "debug: whisper_full lang=%s translate=%d dictation=%d samples=%zu\n",
-                params.language, (int)params.translate,
-                (int)item.is_dictation, item.samples.size());
         params.no_context       = true;
         params.print_progress   = false;
         params.print_realtime   = false;
