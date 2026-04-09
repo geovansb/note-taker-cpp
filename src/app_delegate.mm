@@ -254,19 +254,26 @@ static NSString* const kTranslateKey = @"translate";
         @"large-v3-turbo",
         @"large-v3-q5_0",
     ];
+
+    // Header: active model (informational, not selectable)
+    NSMenuItem* active = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Active: %@", _model]
+                           action:nil keyEquivalent:@""];
+    active.enabled = NO;
+    [sub addItem:active];
+    [sub addItem:[NSMenuItem separatorItem]];
+
+    // Selectable model list
     for (NSString* m in models) {
+        if ([m isEqualToString:_model]) continue;  // skip the active one
         NSString* path   = [self modelPathForKey:m];
         BOOL      exists = [[NSFileManager defaultManager] fileExistsAtPath:path];
         NSString* title  = exists ? m : [m stringByAppendingString:@"  ⚠ not downloaded"];
         NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title
                              action:@selector(selectModel:) keyEquivalent:@""];
         item.representedObject = m;
-        item.state   = [m isEqualToString:_model]
-                       ? NSControlStateValueOn : NSControlStateValueOff;
         item.toolTip = exists
                        ? @"Requires restart to take effect"
-                       : [NSString stringWithFormat:
-                          @"Run: ./scripts/download_model.sh %@", m];
+                       : [NSString stringWithFormat:@"Run: ./scripts/download_model.sh %@", m];
         [sub addItem:item];
     }
     return sub;
