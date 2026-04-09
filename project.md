@@ -53,6 +53,7 @@ note-taker/
 | M2 | whisper.cpp submodule + WhisperWorker + terminal output | ✅ |
 | M3 | Full CLI flags + JSON/TXT output + optional WAV save | ✅ |
 | M4 | Menu bar app: dictation + session recording | ✅ |
+| M5 | Hardening & UX polish (H1–H12) | ✅ |
 
 ---
 
@@ -186,28 +187,28 @@ worker thread    →  WhisperWorker → injectText() OR OutputWriter
 
 | # | Issue | File(s) | Status |
 |---|-------|---------|--------|
-| H1 | NSAlert for mic denied | app_delegate.mm, app_controller.cpp | [ ] |
-| H2 | NSAlert for accessibility denied | app_delegate.mm | [ ] |
-| H3 | Notify user on transcription error (whisper_full failure) | whisper_worker.cpp, app_controller.cpp | [ ] |
-| H4 | Notify user on queue overflow (drop-oldest) | whisper_worker.cpp, app_controller.cpp | [ ] |
-| H5 | `@autoreleasepool` in audio tap callback | audio_capture.mm | [ ] |
+| H1 | NSAlert for mic denied | app_delegate.mm, app_controller.cpp | ✅ |
+| H2 | NSAlert for accessibility denied | app_delegate.mm | ✅ |
+| H3 | Notify user on transcription error (whisper_full failure) | whisper_worker.cpp, app_controller.cpp | ✅ |
+| H4 | Notify user on queue overflow (drop-oldest) | whisper_worker.cpp, app_controller.cpp | ✅ (H3 covers both — on_error_ callback) |
+| H5 | `@autoreleasepool` in audio tap callback | audio_capture.mm | ✅ |
 
 ### Tier 2 — UX polish
 
 | # | Issue | File(s) | Status |
 |---|-------|---------|--------|
-| H6 | Model menu header doesn't update after selection | app_delegate.mm | [ ] |
-| H7 | Keyboard shortcuts for Start/Stop/Open Folder | app_delegate.mm | [ ] |
-| H8 | Status hint for FINALIZING mode (both buttons disabled, no explanation) | app_delegate.mm | [ ] |
-| H9 | Check fwrite return in output_writer and wav_writer | output_writer.cpp, wav_writer.cpp | [ ] |
+| H6 | Model menu header doesn't update after selection | app_delegate.mm | ✅ |
+| H7 | Keyboard shortcuts for Start/Stop/Open Folder | app_delegate.mm | ✅ |
+| H8 | Status hint for FINALIZING mode (both buttons disabled, no explanation) | app_delegate.mm | ✅ |
+| H9 | Check fwrite return in output_writer and wav_writer | output_writer.cpp, wav_writer.cpp | ✅ |
 
 ### Tier 3 — Nice to have
 
 | # | Issue | File(s) | Status |
 |---|-------|---------|--------|
-| H10 | VoiceOver accessibility labels on status button | app_delegate.mm | [ ] |
-| H11 | Configurable hotkey (setHotkey exists, needs UI) | event_tap.h, app_delegate.mm | [ ] |
-| H12 | Show current lang/model in main menu | app_delegate.mm | [ ] |
+| H10 | VoiceOver accessibility labels on status button | app_delegate.mm | ✅ |
+| H11 | Configurable hotkey (setHotkey exists, needs UI) | event_tap.mm, app_delegate.mm | ✅ |
+| H12 | Show current lang/model in main menu | app_delegate.mm | ✅ |
 
 ---
 
