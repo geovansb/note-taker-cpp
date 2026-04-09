@@ -39,6 +39,10 @@ public:
     // Called by AppDelegate to determine if recording is active.
     bool isRecording() const;
 
+    // Change transcription language at runtime. Takes effect on the next chunk.
+    // Pass "auto" to restore automatic detection.
+    void setLanguage(const std::string& lang);
+
     // Hotkey callbacks — forwarded from AppDelegate's EventTap (CFRunLoop thread).
     void onHotkeyDown();
     void onHotkeyUp();

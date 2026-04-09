@@ -47,6 +47,10 @@ public:
     // Cleared after the first invocation. Called on the worker thread.
     void setOnSessionDone(std::function<void()> cb);
 
+    // Change the transcription language at runtime. Takes effect on the next
+    // chunk processed. Pass "auto" to restore automatic detection.
+    void setLanguage(const std::string& lang);
+
     // Load model and start worker thread. Returns false on model load failure.
     bool start();
 

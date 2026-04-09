@@ -88,6 +88,11 @@ void AppController::setOnDictationResult(std::function<void(std::string)> cb) {
     impl_->on_dictation_result = std::move(cb);
 }
 
+void AppController::setLanguage(const std::string& lang) {
+    if (impl_->worker) impl_->worker->setLanguage(lang);
+    impl_->language = lang;
+}
+
 bool AppController::isRecording() const {
     return impl_->mode.load(std::memory_order_relaxed) == MODE_RECORDING;
 }

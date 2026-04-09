@@ -256,6 +256,12 @@ static NSString* const kModelKey = @"model";
     _language = key;
     [[NSUserDefaults standardUserDefaults] setObject:key forKey:kLangKey];
 
+    // Apply immediately to the running controller (no restart needed).
+    if (_controller) {
+        std::string lang = std::string([key UTF8String]);
+        _controller->setLanguage(lang);
+    }
+
     for (NSMenuItem* item in sender.menu.itemArray) {
         item.state = [item.representedObject isEqualToString:key]
                      ? NSControlStateValueOn : NSControlStateValueOff;
