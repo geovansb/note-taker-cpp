@@ -97,6 +97,10 @@ void AppController::setTranslate(bool translate) {
     if (impl_->worker) impl_->worker->setTranslate(translate);
 }
 
+void AppController::setOutputDir(const std::string& dir) {
+    impl_->output_dir = dir;
+}
+
 void AppController::setVadSensitivity(float threshold, float gain) {
     impl_->vad.setThreshold(threshold);
     impl_->vad.setGain(gain);

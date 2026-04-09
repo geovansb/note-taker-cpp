@@ -47,6 +47,10 @@ public:
     // next chunk. When true, language is forced to "auto" for best results.
     void setTranslate(bool translate);
 
+    // Change the output directory for future sessions. Takes effect on the
+    // next startSession() call; an in-progress session keeps its original dir.
+    void setOutputDir(const std::string& dir);
+
     // VAD tuning — changes take effect on the next audio block.
     void setVadSensitivity(float threshold, float gain);
     void setSilenceTimeout(float seconds);

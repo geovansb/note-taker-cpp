@@ -10,6 +10,7 @@ static NSString* const kTranslateKey = @"translate";
 static NSString* const kHotkeyKey    = @"hotkey_keycode";
 static NSString* const kSensitivityKey = @"vad_sensitivity";
 static NSString* const kSilenceKey     = @"silence_timeout";
+static NSString* const kOutputDirKey   = @"output_dir";
 
 @implementation AppDelegate {
     NSStatusItem*  _statusItem;
@@ -29,6 +30,7 @@ static NSString* const kSilenceKey     = @"silence_timeout";
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification*)__unused note {
+    NSString* defaultNotesDir = [NSHomeDirectory() stringByAppendingPathComponent:@"notes"];
     [[NSUserDefaults standardUserDefaults] registerDefaults:@{
         kLangKey:        @"auto",
         kModelKey:       @"large-v3",
@@ -36,6 +38,7 @@ static NSString* const kSilenceKey     = @"silence_timeout";
         kHotkeyKey:      @(kVK_RightOption),
         kSensitivityKey: @"medium",
         kSilenceKey:     @5.0,
+        kOutputDirKey:   defaultNotesDir,
     }];
     _language     = [[NSUserDefaults standardUserDefaults] stringForKey:kLangKey];
     _model        = [[NSUserDefaults standardUserDefaults] stringForKey:kModelKey];
@@ -116,8 +119,7 @@ static NSString* const kSilenceKey     = @"silence_timeout";
 - (void)startController {
     // Resolve paths in ObjC context, then hand off to pure-C++ AppController.
     NSString* modelNS = [self modelPathForKey:_model];
-    NSString* notesNS   = [NSHomeDirectory()
-                            stringByAppendingPathComponent:@"notes"];
+    NSString* notesNS = [[NSUserDefaults standardUserDefaults] stringForKey:kOutputDirKey];
 
     std::string modelPath = std::string([modelNS UTF8String]);
     std::string language  = std::string([_language UTF8String]);
@@ -385,6 +387,11 @@ static NSString* const kSilenceKey     = @"silence_timeout";
     openFolder.enabled = YES;
     [sub addItem:openFolder];
 
+    // Change Notes Folder…
+    NSMenuItem* changeFolder = [[NSMenuItem alloc] initWithTitle:@"Change Notes Folder…"
+                                 action:@selector(changeNotesFolder:) keyEquivalent:@""];
+    [sub addItem:changeFolder];
+
     [sub addItem:[NSMenuItem separatorItem]];
 
     // VAD Sensitivity
@@ -464,6 +471,25 @@ static NSString* const kSilenceKey     = @"silence_timeout";
                                                         error:nil];
     }
     [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:dir]];
+}
+
+- (void)changeNotesFolder:(id)__unused sender {
+    NSOpenPanel* panel = [NSOpenPanel openPanel];
+    panel.canChooseFiles          = NO;
+    panel.canChooseDirectories    = YES;
+    panel.canCreateDirectories    = YES;
+    panel.allowsMultipleSelection = NO;
+    panel.prompt                  = @"Choose";
+    panel.message                 = @"Select folder for session transcripts";
+    panel.directoryURL = [NSURL fileURLWithPath:
+        [NSString stringWithUTF8String:_outputDir.c_str()]];
+
+    if ([panel runModal] == NSModalResponseOK && panel.URL) {
+        NSString* path = panel.URL.path;
+        _outputDir = std::string([path UTF8String]);
+        [[NSUserDefaults standardUserDefaults] setObject:path forKey:kOutputDirKey];
+        if (_controller) _controller->setOutputDir(_outputDir);
+    }
 }
 
 - (void)toggleTranslate:(NSMenuItem*)sender {
