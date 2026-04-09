@@ -1,10 +1,10 @@
 # note-taker — Project Tracking
 
-> macOS CLI meeting recorder: CoreAudio capture → RMS VAD → whisper.cpp → JSON/TXT output.
+> macOS menu bar app: CoreAudio capture → RMS VAD → whisper.cpp → text injection / JSON+TXT output.
 
 ---
 
-## Repository Layout (target)
+## Repository Layout
 
 ```
 note-taker/
@@ -12,240 +12,177 @@ note-taker/
 ├── .gitmodules
 ├── .gitignore
 ├── project.md
-├── whisper.cpp/                  ← git submodule
+├── whisper.cpp/                  ← git submodule (ggerganov/whisper.cpp)
 ├── src/
-│   ├── main.cpp
-│   ├── constants.h
-│   ├── audio_capture.mm
-│   ├── audio_capture.h
-│   ├── vad.cpp
-│   ├── vad.h
-│   ├── chunk_assembler.cpp
-│   ├── chunk_assembler.h
-│   ├── whisper_worker.cpp
-│   ├── whisper_worker.h
-│   ├── output_writer.cpp
-│   ├── output_writer.h
-│   ├── wav_writer.cpp
-│   └── wav_writer.h
+│   ├── main.cpp                  ← CLI entry point (note-taker binary)
+│   ├── bar_main.mm               ← App bundle entry point (note-taker-bar)
+│   ├── constants.h               ← all constexpr numeric constants
+│   ├── audio_capture.mm/h        ← AVAudioEngine, 16kHz mono float32
+│   ├── vad.cpp/h                 ← stateless RMS VAD
+│   ├── chunk_assembler.cpp/h     ← LISTENING/RECORDING state machine
+│   ├── whisper_worker.cpp/h      ← whisper_full on dedicated thread
+│   ├── output_writer.cpp/h       ← atomic JSON+TXT flush
+│   ├── wav_writer.cpp/h          ← RIFF WAV writer
+│   ├── app_controller.cpp/h      ← M4: central controller, owns pipeline
+│   ├── app_delegate.mm/h         ← M4: NSStatusItem, menu, settings
+│   ├── event_tap.mm/h            ← M4: CGEventTap on CFRunLoop thread
+│   └── text_injector.mm/h        ← M4: NSPasteboard + Cmd+V injection
+├── bar/
+│   ├── Info.plist                ← LSUIElement=YES bundle plist
+│   └── entitlements.plist        ← audio-input entitlement
 ├── tests/
-│   └── vad_test.cpp
+│   ├── vad_test.cpp
+│   └── chunk_assembler_test.cpp
 ├── scripts/
-│   └── download_model.sh
+│   ├── download_model.sh         ← wraps whisper.cpp model downloader
+│   ├── build.sh                  ← cmake + Metal + tccutil reset
+│   └── start.sh                  ← open build/note-taker-bar.app
 ├── third_party/
 │   ├── CLI11.hpp
 │   └── nlohmann/json.hpp
-└── models/                       ← gitignored, download ggml-*.bin here
+└── models/                       ← gitignored; place ggml-*.bin here
 ```
 
 ---
 
 ## Milestone Overview
 
-| M | Phase | Goal | Status |
-|---|-------|------|--------|
-| M1 | 1 | CoreAudio capture + RMS VAD + ChunkAssembler (no Whisper) | [x] |
-| M2 | 2 | whisper.cpp submodule + WhisperWorker + terminal output | [x] |
-| M3 | 3 | Full CLI flags + JSON/TXT output + optional WAV save | [x] |
-| M4+ | 4 | Dictation Service: hotkey, text injection, menu bar | [ ] |
+| M | Goal | Status |
+|---|------|--------|
+| M1 | CoreAudio capture + RMS VAD + ChunkAssembler | ✅ |
+| M2 | whisper.cpp submodule + WhisperWorker + terminal output | ✅ |
+| M3 | Full CLI flags + JSON/TXT output + optional WAV save | ✅ |
+| M4 | Menu bar app: dictation + session recording | ✅ |
 
 ---
 
-## M1 — Audio Capture + VAD + ChunkAssembler
+## M1 — Audio Capture + VAD + ChunkAssembler ✅
 
-**Goal:** Record mic audio. Print `[CHUNK] duration=<ms>ms samples=<n>` on speech detection. No Whisper dependency.
+**Acceptance met:** `./note-taker` prints `[CHUNK] duration=<ms>ms` on speech detection, exits cleanly on Ctrl-C.
 
 ### Tasks
 
 - [x] **T1.1** Repository scaffolding: `CMakeLists.txt`, `.gitignore`
-  - `cmake_minimum_required(3.22)`, `project(note-taker CXX OBJCXX)`, `CMAKE_CXX_STANDARD 17`
-  - Acceptance: `cmake -B build && cmake --build build` compiles Hello World
-
 - [x] **T1.2** `src/constants.h` — all hardcoded values as `constexpr`
-  ```cpp
-  constexpr float  VAD_RMS_THRESHOLD    = 0.015f;
-  constexpr float  SILENCE_TIMEOUT_S    = 5.0f;
-  constexpr int    MIN_CHUNK_MS         = 2000;
-  constexpr float  DEFAULT_CHUNK_S      = 15.0f;
-  constexpr int    CAPTURE_SAMPLE_RATE  = 16000;
-  constexpr int    WHISPER_SAMPLE_RATE  = 16000;
-  constexpr float  INPUT_GAIN           = 1.3f;
-  constexpr int    RAW_QUEUE_MAX_BLOCKS = 512;
-  constexpr int    PROCESSING_QUEUE_MAX = 64;
-  ```
-
-- [x] **T1.3** `src/audio_capture.h` + `src/audio_capture.mm`
-  - `bool start(std::function<void(const float*, size_t)> on_block)`
-  - `void stop()`
-  - `static std::vector<std::string> listDevices()`
-  - AVAudioEngine `installTap` at 16kHz mono float32
-  - Request mic permission via `AVCaptureDevice.requestAccess` at startup
-  - Acceptance: `--list-devices` prints device list and exits
-
-- [x] **T1.4** `src/vad.h` + `src/vad.cpp`
-  - `bool isSpeech(const float* samples, size_t n)`
-  - RMS = `sqrt(sum(x^2)/n)`, apply `INPUT_GAIN` first
-  - Acceptance: `vad_test`: silent buffer → false, loud buffer → true
-
-- [x] **T1.5** `src/chunk_assembler.h` + `src/chunk_assembler.cpp`
-  - `ChunkAssembler(Vad&, float max_chunk_s, on_chunk_cb)`
-  - State machine: LISTENING ↔ RECORDING
-    - → RECORDING: VAD true
-    - → LISTENING: silence ≥ `SILENCE_TIMEOUT_S` AND chunk ≥ `MIN_CHUNK_MS`
-  - Hard flush at `max_chunk_s`
-  - `std::mutex` protecting sample buffer (`feed()` is called from tap thread)
-  - Acceptance: synthetic test emits correctly-timed chunks
-
-- [x] **T1.6** `src/main.cpp` (M1 harness)
-  - Simple `argv` scan for `--list-devices`
-  - Wire: `AudioCapture` → `ChunkAssembler::feed()` → `on_chunk` prints chunk info
-  - `SIGINT` handler: `AudioCapture::stop()` + clean join
-
+- [x] **T1.3** `src/audio_capture.mm/h` — AVAudioEngine + mic permission
+- [x] **T1.4** `src/vad.cpp/h` — RMS VAD; `vad_test` passes
+- [x] **T1.5** `src/chunk_assembler.cpp/h` — LISTENING/RECORDING state machine
+- [x] **T1.6** `src/main.cpp` M1 harness
 - [x] **T1.7** CMake: framework linking + `vad_test` target
-  - Link: `-framework AVFoundation -framework CoreAudio -framework Foundation`
-  - `vad_test` target: `tests/vad_test.cpp` + `vad.cpp`
-
-### Design Notes
-
-- AVAudioEngine `installTap` handles format conversion to float32 16kHz internally (no manual `AudioConverter`)
-- Tap callback: **only `memcpy`** — never block the audio thread
-- State flags: `std::atomic<bool>`; mutex only for the sample deque
 
 ---
 
-## M2 — Whisper Integration
+## M2 — Whisper Integration ✅
 
-**Goal:** Speak into mic → transcriptions printed to terminal with `[HH:MM:SS]` prefix.
+**Acceptance met:** Speech → transcriptions in terminal with `[HH:MM:SS]` prefix.
 
 ### Tasks
 
-- [x] **T2.1** Add whisper.cpp as git submodule, pin to latest stable tag
-  - Acceptance: `whisper.cpp/whisper.h` present
-
-- [x] **T2.2** CMake: integrate whisper submodule
-  - `add_subdirectory(whisper.cpp)` with `WHISPER_BUILD_EXAMPLES OFF`
-  - `option(WHISPER_METAL "Enable Metal" OFF)`
-  - `target_link_libraries(note-taker PRIVATE whisper)`
-
-- [x] **T2.3** `src/whisper_worker.h` + `src/whisper_worker.cpp`
-  - Constructor: `(model_path, use_metal, language, translate)`
-  - `void start()` / `void stop()` / `void enqueue(std::vector<float>)`
-  - Bounded queue (`PROCESSING_QUEUE_MAX`), drop-oldest on overflow
-  - `whisper_full_params`: `WHISPER_SAMPLING_GREEDY`, `no_context=true`
-  - Metal: `whisper_context_params.use_gpu = true`
-  - Destructor: `whisper_free(ctx)`
-
+- [x] **T2.1** whisper.cpp git submodule
+- [x] **T2.2** CMake: `add_subdirectory(whisper.cpp)`, Metal option
+- [x] **T2.3** `src/whisper_worker.cpp/h` — bounded queue, drop-oldest, `whisper_free`
 - [x] **T2.4** Wire WhisperWorker into `main.cpp`
-  - Replace `on_chunk` print with `whisper_worker.enqueue(chunk)`
-  - Temporary `--model` parsing via `argv` scan
-  - Shutdown order: `AudioCapture::stop()` → flush assembler → `WhisperWorker::stop()`
-
 - [x] **T2.5** `scripts/download_model.sh`
-  - Wrapper around `whisper.cpp/models/download-ggml-model.sh`
-  - Usage: `./scripts/download_model.sh base`
-
-### Design Notes
-
-- `whisper_full()` is blocking (2–10s for medium chunks) → dedicated `std::thread`, not GCD
-- One `whisper_context*` per WhisperWorker — not thread-safe for sharing
 
 ---
 
-## M3 — Output + Full CLI
+## M3 — Output + Full CLI ✅
 
-**Goal:** All CLI flags functional. Produces `notes/note_<timestamp>.json` + `.txt`. Ctrl-C always writes complete output.
+**Acceptance met:** All CLI flags functional. Produces `notes/note_<timestamp>.json` + `.txt`. Ctrl-C writes complete output.
 
 ### Tasks
 
-- [x] **T3.1** Add `third_party/CLI11.hpp` (single-header)
-- [x] **T3.2** Add `third_party/nlohmann/json.hpp` (single-header)
-
-- [x] **T3.3** Full CLI parsing in `main.cpp` via CLI11
-  - `--model <path>` (default: `models/ggml-medium.bin`)
-  - `--output-dir <path>` (default: `./notes`)
-  - `--language <code>` (default: `auto`)
-  - `--translate` (flag)
-  - `--chunk-seconds <float>` (default: `15.0`)
-  - `--metal` (flag)
-  - `--list-devices` (flag, exit after)
-  - `--save-wav` (flag)
-
-- [x] **T3.4** `src/output_writer.h` + `src/output_writer.cpp`
-  - `void addSegment(int64_t start_ms, int64_t end_ms, const std::string& text)`
-  - `void flush()` — atomic write via `.tmp` → `rename()`
-  - JSON: `{ session_id, model, language, segments: [{start_ms, end_ms, text}] }`
-  - Flush after every chunk (crash safety)
-
-- [x] **T3.5** `src/wav_writer.h` + `src/wav_writer.cpp`
-  - `void writeWav(path, samples, n, sample_rate)` — RIFF + 16-bit PCM
-  - Only called when `--save-wav`
-
-- [x] **T3.6** Make `--chunk-seconds` configurable in ChunkAssembler
-  - Clamp if < `MIN_CHUNK_MS/1000` (with stderr warning)
-
+- [x] **T3.1** `third_party/CLI11.hpp`
+- [x] **T3.2** `third_party/nlohmann/json.hpp`
+- [x] **T3.3** Full CLI parsing (`--model`, `--output-dir`, `--language`, `--translate`, `--chunk-seconds`, `--metal`, `--list-devices`, `--save-wav`)
+- [x] **T3.4** `src/output_writer.cpp/h` — atomic JSON+TXT via `.tmp` → `rename()`
+- [x] **T3.5** `src/wav_writer.cpp/h` — RIFF + 16-bit PCM
+- [x] **T3.6** `--chunk-seconds` configurable in ChunkAssembler
 - [x] **T3.7** Wire OutputWriter + WAV into pipeline
-  - Pass `OutputWriter*` to `WhisperWorker`
-  - Add wall-clock offset to whisper centisecond timestamps in OutputWriter
-
-### Pitfalls
-
-| Pitfall | Mitigation |
-|---------|------------|
-| Mic permission silently denied on macOS 12+ | Request via `AVCaptureDevice.requestAccess` before engine start |
-| `whisper_full` timestamps are centiseconds from chunk start | Add wall-clock offset in OutputWriter, not in WhisperWorker |
-| JSON corrupted on crash | Atomic write: `.tmp` → `rename()` |
-| Metal crashes on Intel Mac | `sysctlbyname("hw.optional.arm64")` guard |
-| `--chunk-seconds` < `MIN_CHUNK_MS/1000` | Clamp + warn |
-
-### M3 Acceptance Checklist
-
-- [ ] `--list-devices` prints devices and exits
-- [ ] Default run transcribes to terminal and writes `notes/note_*.json`
-- [ ] `--language pt` transcribes Portuguese correctly
-- [ ] `--translate` outputs English regardless of spoken language
-- [ ] `--chunk-seconds 5` produces short chunks
-- [ ] `--metal` uses GPU (verify via `sudo powermetrics --show-process-gpu-time`)
-- [ ] `--save-wav` writes `chunk_*.wav` playable in QuickTime
-- [ ] Ctrl-C produces complete JSON (no truncation)
-- [ ] `--output-dir /tmp/test_notes` writes to correct path
 
 ---
 
-## M4+ — Backlog: Dictation Service
+## M4 — Menu Bar App ✅
 
-> Out of current scope. Requires Accessibility permission + persistent NSApplication run loop.
+**Acceptance met:** App lives in menu bar. Hold Right Option → dictation → text injected at cursor. Start/Stop Recording → produces `notes/note_*.json` + `.txt`. Language and model persisted across restarts.
 
-- [ ] **B4.1** CGEventTap global hotkey prototype (logs key events globally)
-- [ ] **B4.2** AXUIElement text injection helper with CGEvent keystroke fallback
-- [ ] **B4.3** NSApplication + NSStatusBar main loop alongside background threads
-- [ ] **B4.4** Push-to-talk state machine (KEY_DOWN = start capture, KEY_UP = flush+transcribe+inject)
-- [ ] **B4.5** Menu bar icon with status indicator (idle / recording / transcribing)
-- [ ] **B4.6** Preferences: configurable hotkey, model, language from menu bar
-- [ ] **B4.7** Entitlements plist + code signing for Accessibility
-- [ ] **B4.8** App bundle + launchd plist for auto-start at login
+### Architecture
+
+```
+main thread      →  [NSApp run] → NSStatusItem, menu callbacks
+CFRunLoop thread →  CGEventTap  → AppController::onHotkeyDown/Up()
+audio thread     →  AVAudioEngine tap → AppController routes by mode
+worker thread    →  WhisperWorker → injectText() OR OutputWriter
+```
+
+**Modes (mutually exclusive):**
+- `IDLE` — audio discarded; Start Recording enabled
+- `DICTATING` — audio buffered; hotkey held
+- `TRANSCRIBING` — whisper processing dictation buffer; injects result at cursor
+- `RECORDING` — VAD-based session; chunks enqueued to WhisperWorker → OutputWriter
+
+### Tasks
+
+- [x] **T4.1** App bundle + basic menu bar skeleton (`bar/Info.plist`, `bar/entitlements.plist`, `bar_main.mm`, `app_delegate.mm/h`)
+- [x] **T4.2** `src/event_tap.mm/h` — CGEventTap on CFRunLoop thread; Right Option hotkey; `kCGEventFlagsChanged` mask
+- [x] **T4.3** `src/app_controller.cpp/h` — owns pipeline; state machine; hotkey + session APIs
+- [x] **T4.4** `src/text_injector.mm/h` — NSPasteboard save/restore + simulated Cmd+V
+- [x] **T4.5** Language submenu (auto/pt/en/es/fr/de) + Model submenu (large-v3/medium/base) + dynamic menu bar icon + NSUserDefaults persistence
+- [~] **T4.6** Start at Login — **deferred** (prototype phase; use `scripts/start.sh` instead)
+
+### Key implementation notes
+
+- `AXIsProcessTrustedWithOptions` must be called on the main thread (UI dialog requirement)
+- EventTap lives in AppDelegate (main thread); AppController has no EventTap dependency
+- AudioCapture is always-on; mode atomic controls routing (avoids ~300ms AVAudioEngine restart)
+- ggml Metal resources (`default.metallib`, `ggml-metal.metal`) must be in `Contents/Resources/` — copied by CMake post-build step
+- Always launch via `open build/note-taker-bar.app` (not direct binary) for correct TCC attribution
+- Ad-hoc re-signing invalidates TCC CDHash entry — run `tccutil reset Accessibility com.local.note-taker-bar` after each rebuild (automated in `scripts/build.sh`)
 
 ---
 
-## Build & Run Reference
+## Build & Run
 
 ```sh
-# Configure
-cmake -B build -DCMAKE_BUILD_TYPE=Release
+# Build (includes tccutil reset)
+./scripts/build.sh
 
-# Configure with Metal (Apple Silicon only)
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DWHISPER_METAL=ON
+# Launch
+./scripts/start.sh
 
-# Build
-cmake --build build --parallel
+# Download models
+./scripts/download_model.sh base      # ~150 MB
+./scripts/download_model.sh medium    # ~1.5 GB
+./scripts/download_model.sh large-v3  # ~3.1 GB
 
-# Download model
-./scripts/download_model.sh base     # ~150MB
-./scripts/download_model.sh medium   # ~1.5GB
-
-# Run
+# CLI tool (M1–M3)
 ./build/note-taker --model models/ggml-base.bin
 ./build/note-taker --list-devices
 
-# VAD unit test
+# Unit tests
 ./build/vad_test
+./build/chunk_assembler_test
 ```
+
+---
+
+## M4 Acceptance Checklist
+
+- [ ] App icon appears in menu bar after `./scripts/start.sh`
+- [ ] Status transitions: `● Idle` → `⏳ Loading model…` → `● Idle`
+- [ ] Menu bar icon changes: `mic.fill` (idle) / `waveform` (loading) / `mic` (dictating) / `record.circle.fill` (recording)
+- [ ] Hold Right Option → status shows `⏺ Dictating…` → release → `⏳ Transcribing…` → text injected at cursor → `● Idle`
+- [ ] Start Recording → `🔴 Recording` → speech produces `notes/note_*.json` + `.txt` → Stop Recording → `● Idle`
+- [ ] Language selection persists after Quit + relaunch
+- [ ] Model selection persists after Quit + relaunch
+- [ ] Open Notes Folder opens `~/notes` in Finder (creates dir if absent)
+- [ ] Quit cleanly drains WhisperWorker before exit
+
+---
+
+## Backlog
+
+- **Start at Login** — LaunchAgent plist; add "Start at Login" checkbox to menu (T4.6)
+- **VAD threshold tuning** — expose `VAD_RMS_THRESHOLD` and `SILENCE_TIMEOUT_S` as menu settings or `NSUserDefaults` keys
+- **Notifications** — `NSUserNotification` / `UNUserNotificationCenter` when session file is written
+- **Multiple model paths** — auto-detect `models/` relative to `.app` bundle; warn in menu if model file missing
