@@ -253,9 +253,10 @@ static NSString* const kTranslateKey = @"translate";
     translateItem.state = translateOn ? NSControlStateValueOn : NSControlStateValueOff;
     [menu addItem:translateItem];
 
-    // Model submenu
+    // tag 6 — Model submenu (rebuilt in selectModel:)
     NSMenuItem* modelParent = [[NSMenuItem alloc] initWithTitle:@"Model"
                                 action:nil keyEquivalent:@""];
+    modelParent.tag     = 6;
     modelParent.submenu = [self buildModelMenu];
     [menu addItem:modelParent];
 
@@ -375,11 +376,9 @@ static NSString* const kTranslateKey = @"translate";
     _model = m;
     [[NSUserDefaults standardUserDefaults] setObject:m forKey:kModelKey];
 
-    for (NSMenuItem* item in sender.menu.itemArray) {
-        BOOL active  = [item.representedObject isEqualToString:m];
-        item.state   = active ? NSControlStateValueOn : NSControlStateValueOff;
-        item.toolTip = @"Requires restart to take effect";
-    }
+    // Rebuild the submenu so the header and selectable list update immediately.
+    NSMenuItem* modelParent = [_statusItem.menu itemWithTag:6];
+    if (modelParent) modelParent.submenu = [self buildModelMenu];
 }
 
 // ── Status updates ────────────────────────────────────────────────────────────
