@@ -151,9 +151,9 @@ worker thread    →  WhisperWorker → injectText() OR OutputWriter
 ./scripts/start.sh
 
 # Download models
-./scripts/download_model.sh base      # ~150 MB
-./scripts/download_model.sh medium    # ~1.5 GB
-./scripts/download_model.sh large-v3  # ~3.1 GB
+./scripts/download_model.sh large-v3        # ~3.1 GB
+./scripts/download_model.sh large-v3-turbo  # ~1.5 GB
+./scripts/download_model.sh large-v3-q5_0   # ~1.1 GB
 
 # CLI tool (M1–M3)
 ./build/note-taker --model models/ggml-base.bin
@@ -180,9 +180,40 @@ worker thread    →  WhisperWorker → injectText() OR OutputWriter
 
 ---
 
+## M5 — Hardening & UX Polish
+
+### Tier 1 — Silent errors → visible feedback
+
+| # | Issue | File(s) | Status |
+|---|-------|---------|--------|
+| H1 | NSAlert for mic denied | app_delegate.mm, app_controller.cpp | [ ] |
+| H2 | NSAlert for accessibility denied | app_delegate.mm | [ ] |
+| H3 | Notify user on transcription error (whisper_full failure) | whisper_worker.cpp, app_controller.cpp | [ ] |
+| H4 | Notify user on queue overflow (drop-oldest) | whisper_worker.cpp, app_controller.cpp | [ ] |
+| H5 | `@autoreleasepool` in audio tap callback | audio_capture.mm | [ ] |
+
+### Tier 2 — UX polish
+
+| # | Issue | File(s) | Status |
+|---|-------|---------|--------|
+| H6 | Model menu header doesn't update after selection | app_delegate.mm | [ ] |
+| H7 | Keyboard shortcuts for Start/Stop/Open Folder | app_delegate.mm | [ ] |
+| H8 | Status hint for FINALIZING mode (both buttons disabled, no explanation) | app_delegate.mm | [ ] |
+| H9 | Check fwrite return in output_writer and wav_writer | output_writer.cpp, wav_writer.cpp | [ ] |
+
+### Tier 3 — Nice to have
+
+| # | Issue | File(s) | Status |
+|---|-------|---------|--------|
+| H10 | VoiceOver accessibility labels on status button | app_delegate.mm | [ ] |
+| H11 | Configurable hotkey (setHotkey exists, needs UI) | event_tap.h, app_delegate.mm | [ ] |
+| H12 | Show current lang/model in main menu | app_delegate.mm | [ ] |
+
+---
+
 ## Backlog
 
 - **Start at Login** — LaunchAgent plist; add "Start at Login" checkbox to menu (T4.6)
 - **VAD threshold tuning** — expose `VAD_RMS_THRESHOLD` and `SILENCE_TIMEOUT_S` as menu settings or `NSUserDefaults` keys
 - **Notifications** — `NSUserNotification` / `UNUserNotificationCenter` when session file is written
-- **Multiple model paths** — auto-detect `models/` relative to `.app` bundle; warn in menu if model file missing
+- **HuggingFace token support** — accept `HF_TOKEN` in download_model.sh for authenticated downloads
