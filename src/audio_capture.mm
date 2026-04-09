@@ -72,30 +72,32 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
                     bufferSize:4096
                         format:hwFormat
                          block:^(AVAudioPCMBuffer* inBuf, AVAudioTime*) {
-        AVAudioFrameCount outCapacity =
-            (AVAudioFrameCount)(inBuf.frameLength *
-                                targetFormat.sampleRate / hwFormat.sampleRate) + 2;
+        @autoreleasepool {
+            AVAudioFrameCount outCapacity =
+                (AVAudioFrameCount)(inBuf.frameLength *
+                                    targetFormat.sampleRate / hwFormat.sampleRate) + 2;
 
-        AVAudioPCMBuffer* outBuf = [[AVAudioPCMBuffer alloc]
-            initWithPCMFormat:targetFormat frameCapacity:outCapacity];
+            AVAudioPCMBuffer* outBuf = [[AVAudioPCMBuffer alloc]
+                initWithPCMFormat:targetFormat frameCapacity:outCapacity];
 
-        __block BOOL consumed = NO;
-        NSError* convErr = nil;
-        [conv convertToBuffer:outBuf
-                        error:&convErr
-          withInputFromBlock:^AVAudioBuffer*(AVAudioPacketCount,
-                                             AVAudioConverterInputStatus* status) {
-            if (consumed) {
-                *status = AVAudioConverterInputStatus_NoDataNow;
-                return nil;
+            __block BOOL consumed = NO;
+            NSError* convErr = nil;
+            [conv convertToBuffer:outBuf
+                            error:&convErr
+              withInputFromBlock:^AVAudioBuffer*(AVAudioPacketCount,
+                                                 AVAudioConverterInputStatus* status) {
+                if (consumed) {
+                    *status = AVAudioConverterInputStatus_NoDataNow;
+                    return nil;
+                }
+                consumed = YES;
+                *status = AVAudioConverterInputStatus_HaveData;
+                return inBuf;
+            }];
+
+            if (!convErr && outBuf.frameLength > 0) {
+                on_block(outBuf.floatChannelData[0], outBuf.frameLength);
             }
-            consumed = YES;
-            *status = AVAudioConverterInputStatus_HaveData;
-            return inBuf;
-        }];
-
-        if (!convErr && outBuf.frameLength > 0) {
-            on_block(outBuf.floatChannelData[0], outBuf.frameLength);
         }
     }];
 
