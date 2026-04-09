@@ -255,7 +255,6 @@ static NSString* const kTranslateKey = @"translate";
         @"large-v3-turbo-q5_0",
         @"large-v3-turbo-q8_0",
         @"medium",
-        @"base",
     ];
     for (NSString* m in models) {
         NSString* path   = [self modelPathForKey:m];
