@@ -111,6 +111,11 @@ bool AppController::start() {
         impl_->model_path, impl_->use_metal, impl_->language, /*translate=*/false
     );
 
+    // Surface transcription errors to the user via the status callback.
+    impl_->worker->setOnError([this](const std::string& msg) {
+        impl_->notifyStatus("⚠ " + msg);
+    });
+
     // on_result fires (on worker thread) after every dictation chunk.
     impl_->worker->setOnResult([this](const std::string& text) {
         if (!text.empty() && impl_->on_dictation_result) {

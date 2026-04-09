@@ -41,6 +41,12 @@ public:
         on_result_ = std::move(cb);
     }
 
+    // Optional: callback invoked when whisper_full fails or the queue overflows.
+    // Receives a short error description. Called on the worker thread.
+    void setOnError(std::function<void(const std::string&)> cb) {
+        on_error_ = std::move(cb);
+    }
+
     // Optional: callback invoked once when the queue empties after all pending
     // session chunks have been processed. Set this before forceFlush() so the
     // worker can fire it even when no new items arrive after forceFlush.
@@ -88,6 +94,7 @@ private:
     int            wav_chunk_idx_    = 0;
 
     std::function<void(const std::string&)> on_result_;
+    std::function<void(const std::string&)> on_error_;
     std::function<void()>                   on_session_done_;
 
     struct whisper_context* ctx_ = nullptr;

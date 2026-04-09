@@ -49,6 +49,7 @@ void WhisperWorker::enqueue(std::vector<float> chunk, int64_t chunk_start_ms,
     if ((int)queue_.size() >= PROCESSING_QUEUE_MAX) {
         fprintf(stderr, "warn: transcription queue full, dropping oldest chunk\n");
         queue_.pop();
+        if (on_error_) on_error_("Transcription queue full — audio chunk dropped");
     }
     queue_.push({std::move(chunk), chunk_start_ms, is_dictation});
     cv_.notify_one();
@@ -143,6 +144,7 @@ void WhisperWorker::workerLoop() {
                               static_cast<int>(item.samples.size()));
         if (rc != 0) {
             fprintf(stderr, "warn: whisper_full returned %d\n", rc);
+            if (on_error_) on_error_("Transcription failed (whisper error " + std::to_string(rc) + ")");
             continue;
         }
 
