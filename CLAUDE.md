@@ -5,11 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build
 
 ```sh
-# Configure (no Metal)
+# Configure (Metal GPU enabled by default on Apple Silicon)
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-
-# Configure with Metal GPU (Apple Silicon only — guard with hw.optional.arm64 check)
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON
 
 # Build all targets
 cmake --build build --parallel
@@ -18,6 +15,9 @@ cmake --build build --parallel
 ./build/note-taker
 ./build/note-taker --list-devices
 ```
+
+Binary is portable across all Apple Silicon Macs by default (`-march=native` is off).
+See `docs/DISTRIBUTION.md` for how to deploy to other machines.
 
 ## Tests
 

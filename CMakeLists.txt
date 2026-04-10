@@ -9,7 +9,7 @@ set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 # Prevent cmake from defaulting all executables to bundles.
 set(MACOSX_BUNDLE FALSE)
 
-option(NOTETAKER_NATIVE_ARCH "Build with -march=native for this CPU" ON)
+option(NOTETAKER_NATIVE_ARCH "Build with -march=native for this CPU" OFF)
 
 # whisper.cpp — disable everything we don't need
 set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
@@ -18,7 +18,7 @@ set(WHISPER_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS      OFF CACHE BOOL "" FORCE)
 set(GGML_LTO               ON  CACHE BOOL "" FORCE)
 
-option(GGML_METAL "Enable Metal GPU acceleration (Apple Silicon)" OFF)
+option(GGML_METAL "Enable Metal GPU acceleration (Apple Silicon)" ON)
 
 add_subdirectory(whisper.cpp)
 
@@ -97,22 +97,23 @@ target_link_libraries(note-taker-bar PRIVATE
     "-framework ApplicationServices"
     "-framework Carbon"
 )
-# Copy ggml Metal resources into the bundle before signing.
-# ggml looks for these via [NSBundle mainBundle] at runtime, so they must live
-# in Contents/Resources/. The .metallib is the precompiled shader library;
-# .metal is the source fallback used if the library is missing.
-add_custom_command(TARGET note-taker-bar POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_BUNDLE_DIR:note-taker-bar>/Contents/Resources"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_BINARY_DIR}/bin/default.metallib"
-            "$<TARGET_BUNDLE_DIR:note-taker-bar>/Contents/Resources/default.metallib"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_BINARY_DIR}/bin/ggml-metal.metal"
-            "$<TARGET_BUNDLE_DIR:note-taker-bar>/Contents/Resources/ggml-metal.metal"
-    COMMENT "Bundling ggml Metal resources into note-taker-bar.app"
-    VERBATIM
-)
+# Copy ggml Metal resources into the bundle when shaders are NOT embedded.
+# When GGML_METAL_EMBED_LIBRARY is ON (default), shaders are compiled into the
+# static library and no external files are needed at runtime.
+if(GGML_METAL AND NOT GGML_METAL_EMBED_LIBRARY)
+    add_custom_command(TARGET note-taker-bar POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_BUNDLE_DIR:note-taker-bar>/Contents/Resources"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_BINARY_DIR}/bin/default.metallib"
+                "$<TARGET_BUNDLE_DIR:note-taker-bar>/Contents/Resources/default.metallib"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_BINARY_DIR}/bin/ggml-metal.metal"
+                "$<TARGET_BUNDLE_DIR:note-taker-bar>/Contents/Resources/ggml-metal.metal"
+        COMMENT "Bundling ggml Metal resources into note-taker-bar.app"
+        VERBATIM
+    )
+endif()
 # Sign the whole .app bundle (not just the executable).
 add_custom_command(TARGET note-taker-bar POST_BUILD
     COMMAND codesign --force --sign -
