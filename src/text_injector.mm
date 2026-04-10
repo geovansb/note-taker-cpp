@@ -4,6 +4,10 @@
 #import <ApplicationServices/ApplicationServices.h>
 #include <Carbon/Carbon.h>
 
+// Generation counter: only restore the pasteboard if no newer injection has started.
+// Avoids the race where rapid dictations clobber each other's saved clipboard.
+static uint64_t g_inject_gen = 0;
+
 void injectText(const std::string& utf8_text) {
     if (utf8_text.empty()) return;
 
@@ -11,9 +15,12 @@ void injectText(const std::string& utf8_text) {
     if (!text) return;
 
     NSPasteboard* pb = [NSPasteboard generalPasteboard];
+    uint64_t gen = ++g_inject_gen;
 
     // ── Save current pasteboard so we can restore it after paste ──────────────
-    // We snapshot the types and data before overwriting.
+    // Only snapshot on the first injection (gen was 1, i.e. no pending restore).
+    // If another injection is already in flight, the original was already saved
+    // by the first one and its restore will be skipped (generation mismatch).
     NSArray<NSPasteboardItem*>* saved_items = nil;
     NSArray<NSString*>* types = pb.types;
     if (types.count > 0) {
@@ -50,9 +57,11 @@ void injectText(const std::string& utf8_text) {
     CFRelease(key_up);
 
     // ── Restore original pasteboard after paste has been processed ────────────
+    // Only restore if no newer injection has started (generation still matches).
     NSArray<NSPasteboardItem*>* items_to_restore = saved_items;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(300 * NSEC_PER_MSEC)),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1000 * NSEC_PER_MSEC)),
                    dispatch_get_main_queue(), ^{
+        if (g_inject_gen != gen) return; // newer injection in flight — skip restore
         if (items_to_restore.count > 0) {
             [pb clearContents];
             [pb writeObjects:items_to_restore];
