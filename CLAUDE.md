@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 
 # Configure with Metal GPU (Apple Silicon only — guard with hw.optional.arm64 check)
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DWHISPER_METAL=ON
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON
 
 # Build all targets
 cmake --build build --parallel
@@ -39,11 +39,11 @@ CoreAudio tap (audio thread)
   └─ AudioCapture::on_block callback
        └─ ChunkAssembler::feed()     ← state machine, mutex-protected
             └─ on_chunk callback     ← called outside the mutex
-                 └─ WhisperWorker::enqueue()   [M2]
-                      └─ OutputWriter::addSegment() + flush()  [M3]
+                 └─ WhisperWorker::enqueue()
+                      └─ OutputWriter::addSegment() + flush()
 ```
 
-**`src/audio_capture.mm`** (Objective-C++) — the only `.mm` file. Owns `AVAudioEngine`. macOS requires the `installTap` format to match the hardware's native format exactly; format conversion to 16kHz mono float32 is done explicitly with `AVAudioConverter` inside the tap callback. Call `[engine prepare]` before querying `inputNode.outputFormatForBus:0` — querying before prepare returns invalid formats on macOS.
+**`src/audio_capture.mm`** (Objective-C++) — owns `AVAudioEngine`. macOS requires the `installTap` format to match the hardware's native format exactly; format conversion to 16kHz mono float32 is done explicitly with `AVAudioConverter` inside the tap callback. Call `[engine prepare]` before querying `inputNode.outputFormatForBus:0` — querying before prepare returns invalid formats on macOS.
 
 **`src/chunk_assembler.cpp`** — LISTENING/RECORDING state machine. `feed()` is called from the AVAudioEngine audio thread; it acquires a `std::mutex` only for buffer operations, then calls `on_chunk` outside the lock (never hold the lock across the callback). Hard flush at `max_chunk_s` prevents unbounded buffer growth when speaker doesn't pause.
 
@@ -51,18 +51,18 @@ CoreAudio tap (audio thread)
 
 **`src/constants.h`** — single source of truth for all numeric constants. All are `constexpr`. No magic numbers anywhere else.
 
-**`src/whisper_worker.cpp`** [M2, not yet implemented] — owns one `whisper_context*` (not thread-safe, never share). Uses a bounded `std::queue` + `std::condition_variable`. Drop-oldest policy on overflow to protect the audio thread from ever blocking.
+**`src/whisper_worker.cpp`** — owns one `whisper_context*` (not thread-safe, never share). Uses a bounded `std::queue` + `std::condition_variable`. Drop-oldest policy on overflow to protect the audio thread from ever blocking.
 
-**`src/output_writer.cpp`** [M3, not yet implemented] — accumulates segments in memory, writes JSON + TXT atomically via `.tmp` → `rename()` after every chunk.
+**`src/output_writer.cpp`** — accumulates segments in memory, writes JSON + TXT atomically via `.tmp` → `rename()` after every chunk.
 
 ## Key constraints
 
-- `audio_capture.mm` is the only file that may import ObjC frameworks. All other `.cpp` files are pure C++.
+- `.mm` files (ObjC++) are: `audio_capture.mm`, `app_delegate.mm`, `bar_main.mm`, `event_tap.mm`, `text_injector.mm`. All other `.cpp` files are pure C++.
 - ObjC types must not leak into `.h` headers — use PIMPL (`struct Impl` defined only in `.mm`).
 - The AVAudioEngine tap callback runs on a dedicated audio thread. Never do heavy work there: only copy samples and call `ChunkAssembler::feed()`.
-- `whisper_full()` [M2] is blocking and not thread-safe for a shared context — always call from the dedicated WhisperWorker thread.
+- `whisper_full()` is blocking and not thread-safe for a shared context — always call from the dedicated WhisperWorker thread.
 - JSON writes use atomic rename to survive Ctrl-C mid-write.
 
 ## Project status
 
-See `project.md` for milestone tracking (M1–M4+). Currently in M1 (audio capture + VAD, no Whisper yet).
+All milestones (M1–M5) are complete. See `project.md` for details.
