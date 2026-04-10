@@ -9,6 +9,8 @@ set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 # Prevent cmake from defaulting all executables to bundles.
 set(MACOSX_BUNDLE FALSE)
 
+option(NOTETAKER_NATIVE_ARCH "Build with -march=native for this CPU" ON)
+
 # whisper.cpp — disable everything we don't need
 set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -29,7 +31,10 @@ add_executable(note-taker
     src/wav_writer.cpp
 )
 target_include_directories(note-taker PRIVATE src third_party whisper.cpp/include)
-target_compile_options(note-taker PRIVATE -Wall -Wextra -Wno-unused-parameter)
+target_compile_options(note-taker PRIVATE
+    -Wall -Wextra -Wno-unused-parameter
+    $<$<AND:$<BOOL:${NOTETAKER_NATIVE_ARCH}>,$<CONFIG:Release>>:-march=native>
+)
 
 target_link_libraries(note-taker PRIVATE
     whisper
@@ -77,6 +82,7 @@ set_target_properties(note-taker-bar PROPERTIES
 target_compile_options(note-taker-bar PRIVATE
     -Wall -Wextra -Wno-unused-parameter
     $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+    $<$<AND:$<BOOL:${NOTETAKER_NATIVE_ARCH}>,$<CONFIG:Release>>:-march=native>
 )
 target_include_directories(note-taker-bar PRIVATE src third_party whisper.cpp/include)
 target_link_libraries(note-taker-bar PRIVATE

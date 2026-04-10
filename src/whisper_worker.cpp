@@ -96,6 +96,16 @@ void WhisperWorker::stop() {
 }
 
 void WhisperWorker::workerLoop() {
+    // Static whisper params — only language and translate change per chunk.
+    whisper_full_params params =
+        whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    params.no_context       = true;
+    params.print_progress   = false;
+    params.print_realtime   = false;
+    params.print_timestamps = false;
+    params.print_special    = false;
+    params.single_segment   = false;
+
     while (true) {
         ChunkItem item;
         std::string lang;
@@ -134,17 +144,9 @@ void WhisperWorker::workerLoop() {
                      WHISPER_SAMPLE_RATE);
         }
 
-        whisper_full_params params =
-            whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-
-        params.language         = lang.empty() ? "auto" : lang.c_str();
-        params.translate        = do_translate;
-        params.no_context       = true;
-        params.print_progress   = false;
-        params.print_realtime   = false;
-        params.print_timestamps = false;
-        params.print_special    = false;
-        params.single_segment   = false;
+        // Update per-chunk fields.
+        params.language  = lang.empty() ? "auto" : lang.c_str();
+        params.translate = do_translate;
 
         int rc = whisper_full(ctx_, params,
                               item.samples.data(),
