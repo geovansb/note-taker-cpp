@@ -139,6 +139,7 @@ bool AppController::start() {
     });
 
     if (!impl_->worker->start()) {
+        impl_->worker.reset(); // prevent enqueue() on a null whisper context
         impl_->notifyStatus("⚠ Model not found");
         return false;
     }
