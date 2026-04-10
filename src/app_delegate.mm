@@ -160,6 +160,14 @@ static NSString* const kOutputDirKey   = @"output_dir";
         dispatch_async(dispatch_get_main_queue(), ^{
             AppDelegate* d = weakSelf;
             if (!d) return;
+
+            // "⚠ beep" is a synthetic status: play error sound but don't
+            // change the displayed status or icon.
+            if ([s isEqualToString:@"⚠ beep"]) {
+                NSBeep();
+                return;
+            }
+
             [d setStatusTitle:s];
             [d updateMenuForStatus:s];
 

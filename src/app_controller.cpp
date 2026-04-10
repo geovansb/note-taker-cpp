@@ -211,8 +211,11 @@ void AppController::onHotkeyDown() {
     std::lock_guard<std::mutex> lock(impl_->dict_mutex);
 
     int expected = MODE_IDLE;
-    if (!impl_->mode.compare_exchange_strong(expected, MODE_DICTATING))
-        return; // only transition from IDLE (ignores key if RECORDING or TRANSCRIBING)
+    if (!impl_->mode.compare_exchange_strong(expected, MODE_DICTATING)) {
+        // Beep so the user knows the hotkey was ignored (e.g. during recording).
+        impl_->notifyStatus("⚠ beep");
+        return;
+    }
 
     impl_->dict_buffer.clear();
     impl_->dict_buffer.reserve(30 * CAPTURE_SAMPLE_RATE); // 30s max dictation
