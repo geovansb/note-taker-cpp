@@ -10,6 +10,70 @@ struct AudioCapture::Impl {
     AVAudioPCMBuffer* outBuf   = nil;  // reused across tap callbacks
     id                configObserver = nil;
     std::function<void()> on_config_change;
+    std::function<void(const float*, size_t)> on_block; // kept for tap reinstall
+
+    // (Re)install tap + converter on the current engine's input node.
+    // Called from start() and from the config-change notification handler.
+    bool installTap() {
+        AVAudioInputNode* inputNode = engine.inputNode;
+        [engine prepare];
+
+        AVAudioFormat* hwFormat = [inputNode outputFormatForBus:0];
+        fprintf(stderr, "info: hardware format %.0f Hz, %u ch\n",
+                hwFormat.sampleRate, (unsigned)hwFormat.channelCount);
+
+        AVAudioFormat* targetFormat = [[AVAudioFormat alloc]
+            initWithCommonFormat:AVAudioPCMFormatFloat32
+                      sampleRate:CAPTURE_SAMPLE_RATE
+                        channels:1
+                     interleaved:NO];
+
+        converter = [[AVAudioConverter alloc] initFromFormat:hwFormat toFormat:targetFormat];
+        if (!converter) {
+            fprintf(stderr, "error: could not create AVAudioConverter "
+                            "(%.0fHz %uch → %dHz 1ch)\n",
+                    hwFormat.sampleRate, (unsigned)hwFormat.channelCount,
+                    CAPTURE_SAMPLE_RATE);
+            return false;
+        }
+
+        AVAudioFrameCount outCapacity =
+            (AVAudioFrameCount)(4096 * targetFormat.sampleRate / hwFormat.sampleRate) + 2;
+        outBuf = [[AVAudioPCMBuffer alloc]
+            initWithPCMFormat:targetFormat frameCapacity:outCapacity];
+
+        AVAudioConverter* conv = converter;
+        AVAudioPCMBuffer* reusableBuf = outBuf;
+        auto callback = on_block;
+        [inputNode installTapOnBus:0
+                        bufferSize:4096
+                            format:hwFormat
+                             block:^(AVAudioPCMBuffer* inBuf, AVAudioTime*) {
+            @autoreleasepool {
+                reusableBuf.frameLength = 0;
+
+                __block BOOL consumed = NO;
+                NSError* convErr = nil;
+                [conv convertToBuffer:reusableBuf
+                                error:&convErr
+                  withInputFromBlock:^AVAudioBuffer*(AVAudioPacketCount,
+                                                     AVAudioConverterInputStatus* status) {
+                    if (consumed) {
+                        *status = AVAudioConverterInputStatus_NoDataNow;
+                        return nil;
+                    }
+                    consumed = YES;
+                    *status = AVAudioConverterInputStatus_HaveData;
+                    return inBuf;
+                }];
+
+                if (!convErr && reusableBuf.frameLength > 0) {
+                    callback(reusableBuf.floatChannelData[0], reusableBuf.frameLength);
+                }
+            }
+        }];
+        return true;
+    }
 };
 
 AudioCapture::AudioCapture() : impl_(new Impl()) {}
@@ -36,96 +100,42 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
         return false;
     }
 
+    impl_->on_block = on_block;
     impl_->engine = [[AVAudioEngine alloc] init];
 
     // Access inputNode BEFORE prepare/start: it is lazily initialised on first
     // access. If prepare is called before this, the engine graph has no nodes
     // and throws "required condition is false: inputNode != nullptr".
-    AVAudioInputNode* inputNode = impl_->engine.inputNode;
+    (void)impl_->engine.inputNode;
 
-    // prepare() finalises the hardware connection. Query the format after.
-    [impl_->engine prepare];
-
-    AVAudioFormat* hwFormat = [inputNode outputFormatForBus:0];
-
-    fprintf(stderr, "info: hardware format %.0f Hz, %u ch\n",
-            hwFormat.sampleRate, (unsigned)hwFormat.channelCount);
-
-    AVAudioFormat* targetFormat = [[AVAudioFormat alloc]
-        initWithCommonFormat:AVAudioPCMFormatFloat32
-                  sampleRate:CAPTURE_SAMPLE_RATE
-                    channels:1
-                 interleaved:NO];
-
-    impl_->converter = [[AVAudioConverter alloc]
-        initFromFormat:hwFormat toFormat:targetFormat];
-
-    if (!impl_->converter) {
-        fprintf(stderr, "error: could not create AVAudioConverter "
-                        "(%.0fHz %uch → %dHz 1ch)\n",
-                hwFormat.sampleRate, (unsigned)hwFormat.channelCount,
-                CAPTURE_SAMPLE_RATE);
-        return false;
-    }
-
-    // macOS requires the tap format to exactly match the inputNode's hardware format.
-    // We convert to 16kHz mono float32 explicitly inside the callback.
-    // Pre-allocate the output buffer once; reused across all tap callbacks to avoid
-    // per-callback allocations on the realtime audio thread.
-    AVAudioFrameCount outCapacity =
-        (AVAudioFrameCount)(4096 * targetFormat.sampleRate / hwFormat.sampleRate) + 2;
-    impl_->outBuf = [[AVAudioPCMBuffer alloc]
-        initWithPCMFormat:targetFormat frameCapacity:outCapacity];
-
-    AVAudioConverter* conv = impl_->converter; // strong capture for the block
-    AVAudioPCMBuffer* reusableBuf = impl_->outBuf;
-    [inputNode installTapOnBus:0
-                    bufferSize:4096
-                        format:hwFormat
-                         block:^(AVAudioPCMBuffer* inBuf, AVAudioTime*) {
-        @autoreleasepool {
-            reusableBuf.frameLength = 0;
-
-            __block BOOL consumed = NO;
-            NSError* convErr = nil;
-            [conv convertToBuffer:reusableBuf
-                            error:&convErr
-              withInputFromBlock:^AVAudioBuffer*(AVAudioPacketCount,
-                                                 AVAudioConverterInputStatus* status) {
-                if (consumed) {
-                    *status = AVAudioConverterInputStatus_NoDataNow;
-                    return nil;
-                }
-                consumed = YES;
-                *status = AVAudioConverterInputStatus_HaveData;
-                return inBuf;
-            }];
-
-            if (!convErr && reusableBuf.frameLength > 0) {
-                on_block(reusableBuf.floatChannelData[0], reusableBuf.frameLength);
-            }
-        }
-    }];
+    if (!impl_->installTap()) return false;
 
     // Monitor audio configuration changes (device unplug, format change).
-    AVAudioEngine* engineRef = impl_->engine;
-    auto& changeCb = impl_->on_config_change;
+    // On change: tear down old tap/converter, reconfigure for new hardware, reinstall.
+    Impl* p = impl_;
     impl_->configObserver = [[NSNotificationCenter defaultCenter]
         addObserverForName:AVAudioEngineConfigurationChangeNotification
                     object:impl_->engine
                      queue:nil
                 usingBlock:^(NSNotification*) {
-        fprintf(stderr, "warn: audio configuration changed (device unplug?)\n");
-        // Try to restart the engine so capture resumes with the new default device.
-        if (engineRef) {
-            NSError* restartErr = nil;
-            [engineRef startAndReturnError:&restartErr];
-            if (restartErr) {
-                fprintf(stderr, "warn: engine restart failed: %s\n",
-                        restartErr.localizedDescription.UTF8String);
-            }
+        fprintf(stderr, "warn: audio configuration changed — reconfiguring…\n");
+        // Remove old tap before reinstalling with the new format.
+        [p->engine.inputNode removeTapOnBus:0];
+        p->converter = nil;
+        p->outBuf    = nil;
+
+        if (!p->installTap()) {
+            fprintf(stderr, "error: failed to reinstall tap after config change\n");
         }
-        if (changeCb) changeCb();
+        NSError* restartErr = nil;
+        [p->engine startAndReturnError:&restartErr];
+        if (restartErr) {
+            fprintf(stderr, "warn: engine restart failed: %s\n",
+                    restartErr.localizedDescription.UTF8String);
+        } else {
+            fprintf(stderr, "info: audio capture resumed after config change\n");
+        }
+        if (p->on_config_change) p->on_config_change();
     }];
 
     NSError* err = nil;
