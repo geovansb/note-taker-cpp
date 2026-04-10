@@ -5,6 +5,8 @@
 #include <Carbon/Carbon.h>
 #include <thread>
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 
 struct EventTapImpl {
     int                      hotkey   = kVK_RightOption;
@@ -15,6 +17,9 @@ struct EventTapImpl {
     CFRunLoopRef             run_loop = nullptr;
     std::thread              thread;
     std::atomic<bool>        running  { false };
+    std::mutex               ready_mutex;
+    std::condition_variable  ready_cv;
+    bool                     ready    = false;
 };
 
 static CGEventRef event_tap_callback(CGEventTapProxy __unused proxy,
@@ -112,14 +117,28 @@ bool EventTap::start(std::function<void()> on_down, std::function<void()> on_up)
     impl_->src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, impl_->tap, 0);
     impl_->running = true;
 
+    impl_->ready = false;
     impl_->thread = std::thread([this] {
         impl_->run_loop = CFRunLoopGetCurrent();
         CFRunLoopAddSource(impl_->run_loop, impl_->src, kCFRunLoopCommonModes);
         CGEventTapEnable(impl_->tap, true);
+        // Signal that the run loop is about to start — start() can return safely.
+        {
+            std::lock_guard<std::mutex> lock(impl_->ready_mutex);
+            impl_->ready = true;
+        }
+        impl_->ready_cv.notify_one();
         CFRunLoopRun();   // blocks until CFRunLoopStop()
         CGEventTapEnable(impl_->tap, false);
         CFRunLoopRemoveSource(impl_->run_loop, impl_->src, kCFRunLoopCommonModes);
     });
+
+    // Wait until the run loop thread is ready before returning, so no events
+    // arriving immediately after start() are lost.
+    {
+        std::unique_lock<std::mutex> lock(impl_->ready_mutex);
+        impl_->ready_cv.wait(lock, [this] { return impl_->ready; });
+    }
 
     return true;
 }
