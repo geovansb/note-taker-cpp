@@ -62,25 +62,26 @@ OutputWriter::OutputWriter(const std::string& output_dir,
 
 void OutputWriter::addSegment(int64_t start_ms, int64_t end_ms, const std::string& text) {
     std::lock_guard<std::mutex> lock(mutex_);
-    segments_.push_back({start_ms, end_ms, text});
+    pending_.push_back({start_ms, end_ms, text});
 }
 
 void OutputWriter::flush() {
-    std::vector<Segment> snap;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        snap = std::move(segments_);
+        if (pending_.empty()) return;
+        all_segments_.insert(all_segments_.end(),
+                             std::make_move_iterator(pending_.begin()),
+                             std::make_move_iterator(pending_.end()));
+        pending_.clear();
     }
 
-    if (snap.empty()) return;
-
-    // JSON
+    // JSON — write the full session every time (atomic overwrite).
     json doc;
     doc["session_id"] = session_id_;
     doc["model"]      = model_;
     doc["language"]   = language_;
     doc["segments"]   = json::array();
-    for (const auto& s : snap) {
+    for (const auto& s : all_segments_) {
         doc["segments"].push_back({
             {"start_ms", s.start_ms},
             {"end_ms",   s.end_ms},
@@ -93,8 +94,8 @@ void OutputWriter::flush() {
 
     // Plain-text transcript: one line per segment
     std::string txt;
-    txt.reserve(snap.size() * 80);
-    for (const auto& s : snap) {
+    txt.reserve(all_segments_.size() * 80);
+    for (const auto& s : all_segments_) {
         txt += s.text;
         txt += '\n';
     }

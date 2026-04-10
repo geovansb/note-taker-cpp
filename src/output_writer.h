@@ -45,7 +45,8 @@ private:
     std::string json_path_;
     std::string txt_path_;
 
-    std::vector<Segment> segments_;
+    std::vector<Segment> pending_;        // new segments not yet flushed
+    std::vector<Segment> all_segments_;   // full session accumulator (written to disk)
     std::mutex           mutex_;
     std::function<void(std::string)> on_error_;
 };
