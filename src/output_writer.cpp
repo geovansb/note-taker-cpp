@@ -47,17 +47,6 @@ static bool write_atomic(const std::string& path, const std::string& content) {
     return ok;
 }
 
-// Format ms-since-epoch as HH:MM:SS (local time).
-static std::string ms_to_hhmmss(int64_t session_start_unix_ms, int64_t offset_ms) {
-    int64_t abs_ms  = session_start_unix_ms + offset_ms;
-    time_t  t       = static_cast<time_t>(abs_ms / 1000);
-    struct tm tm_info;
-    localtime_r(&t, &tm_info);
-    char buf[16];
-    strftime(buf, sizeof(buf), "%H:%M:%S", &tm_info);
-    return buf;
-}
-
 OutputWriter::OutputWriter(const std::string& output_dir,
                            const std::string& session_id,
                            const std::string& model,

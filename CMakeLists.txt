@@ -29,6 +29,7 @@ add_executable(note-taker
     src/wav_writer.cpp
 )
 target_include_directories(note-taker PRIVATE src third_party whisper.cpp/include)
+target_compile_options(note-taker PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
 target_link_libraries(note-taker PRIVATE
     whisper
@@ -74,6 +75,7 @@ set_target_properties(note-taker-bar PROPERTIES
 # Enable ARC for all ObjC/ObjC++ sources in this target so we can use
 # __weak references (required for safe dispatch_after blocks on Tahoe).
 target_compile_options(note-taker-bar PRIVATE
+    -Wall -Wextra -Wno-unused-parameter
     $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
 )
 target_include_directories(note-taker-bar PRIVATE src third_party whisper.cpp/include)
@@ -87,7 +89,6 @@ target_link_libraries(note-taker-bar PRIVATE
     "-framework CoreGraphics"
     "-framework ApplicationServices"
     "-framework Carbon"
-    "-framework UserNotifications"
 )
 # Copy ggml Metal resources into the bundle before signing.
 # ggml looks for these via [NSBundle mainBundle] at runtime, so they must live

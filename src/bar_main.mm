@@ -15,7 +15,7 @@ int main(int argc, const char* argv[]) {
                     fprintf(stderr, "error: another instance of note-taker-bar is already running (pid %d)\n",
                             app.processIdentifier);
                     // Bring the existing instance's menu to attention.
-                    [app activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+                    [app activateWithOptions:0];
                     return 1;
                 }
             }
