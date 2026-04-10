@@ -3,7 +3,6 @@
 #include "event_tap.h"
 #include "text_injector.h"
 #include <Carbon/Carbon.h>
-#import <UserNotifications/UserNotifications.h>
 
 static NSString* const kLangKey      = @"language";
 static NSString* const kModelKey     = @"model";
@@ -45,17 +44,6 @@ static NSString* const kOutputDirKey   = @"output_dir";
     _model        = [[NSUserDefaults standardUserDefaults] stringForKey:kModelKey];
     _activeModel  = _model;  // loaded model = selected at launch
     _hotkeyCode   = (int)[[NSUserDefaults standardUserDefaults] integerForKey:kHotkeyKey];
-
-    // Request notification permission and set ourselves as delegate so
-    // notifications display even when the app is in the foreground.
-    UNUserNotificationCenter* nc = [UNUserNotificationCenter currentNotificationCenter];
-    nc.delegate = self;
-    [nc requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
-                      completionHandler:^(BOOL granted, NSError* err) {
-        if (!granted) {
-            NSLog(@"[note-taker] Notification permission not granted: %@", err);
-        }
-    }];
 
     // Monitor sleep/wake to handle audio interruption gracefully.
     __weak AppDelegate* weakSelfForSleep = self;
@@ -513,26 +501,30 @@ static NSString* const kOutputDirKey   = @"output_dir";
     [alert runModal];
 }
 
-// UNUserNotificationCenterDelegate — present notifications even when the app
-// is in the foreground (menu bar apps are always technically "active").
-- (void)userNotificationCenter:(UNUserNotificationCenter*)__unused center
-       willPresentNotification:(UNNotification*)__unused notification
-         withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
-    completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionSound);
-}
-
 - (void)postSessionSavedNotification {
-    UNMutableNotificationContent* content = [[UNMutableNotificationContent alloc] init];
-    content.title = @"Recording saved";
-    content.body  = [NSString stringWithFormat:@"Transcript saved to %@",
-                     [NSString stringWithUTF8String:_outputDir.c_str()]];
+    // Menu bar apps (LSUIElement) can't reliably use UNUserNotificationCenter
+    // because macOS won't show the permission prompt. Instead, provide feedback
+    // directly in the menu bar: sound + temporary checkmark icon + status text.
+    [[NSSound soundNamed:@"Glass"] play];
 
-    UNNotificationRequest* req =
-        [UNNotificationRequest requestWithIdentifier:@"session-saved"
-                                             content:content
-                                             trigger:nil]; // deliver immediately
-    [[UNUserNotificationCenter currentNotificationCenter]
-        addNotificationRequest:req withCompletionHandler:nil];
+    [self setStatusTitle:@"✓ Recording saved"];
+
+    // Show a checkmark icon for 4 seconds, then revert to idle.
+    NSImage* checkImg = [NSImage imageWithSystemSymbolName:@"checkmark.circle.fill"
+                                   accessibilityDescription:@"note-taker: saved"];
+    if (checkImg) {
+        [checkImg setTemplate:YES];
+        _statusItem.button.image = checkImg;
+    }
+
+    __weak AppDelegate* weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        AppDelegate* d = weakSelf;
+        if (!d) return;
+        [d setStatusTitle:@"● Idle"];
+        [d applyIconForStatus:@"● Idle"];
+    });
 }
 
 - (void)openNotesFolder:(id)__unused sender {
