@@ -35,7 +35,7 @@ static std::string make_session_id() {
 
 int main(int argc, char* argv[]) {
     CLI::App app{"note-taker — macOS microphone transcriber"};
-    app.set_version_flag("--version", "0.3.0");
+    app.set_version_flag("--version", "4.0.0");
 
     std::string model_path   = "models/ggml-large-v3.bin";
     std::string output_dir   = "notes";
