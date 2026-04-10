@@ -161,6 +161,9 @@ bool AppController::start() {
     // ── AudioCapture ──────────────────────────────────────────────────────────
     // Started once and never stopped — eliminates the ~300ms AVAudioEngine
     // restart latency that would otherwise occur on every dictation keypress.
+    impl_->capture.setOnConfigChange([this] {
+        impl_->notifyStatus("⚠ Audio device changed");
+    });
     bool mic_ok = impl_->capture.start([this](const float* s, size_t n) {
         int mode = impl_->mode.load(std::memory_order_relaxed);
         if (mode == MODE_DICTATING) {
@@ -202,15 +205,16 @@ void AppController::stop() {
 // ── Hotkey state machine ──────────────────────────────────────────────────────
 
 void AppController::onHotkeyDown() {
+    // Acquire dict_mutex before CAS so buffer clear is atomic with mode change.
+    // Prevents tap thread from appending to the old buffer between CAS and clear.
+    std::lock_guard<std::mutex> lock(impl_->dict_mutex);
+
     int expected = MODE_IDLE;
     if (!impl_->mode.compare_exchange_strong(expected, MODE_DICTATING))
         return; // only transition from IDLE (ignores key if RECORDING or TRANSCRIBING)
 
-    {
-        std::lock_guard<std::mutex> lock(impl_->dict_mutex);
-        impl_->dict_buffer.clear();
-        impl_->dict_buffer.reserve(30 * CAPTURE_SAMPLE_RATE); // 30s max dictation
-    }
+    impl_->dict_buffer.clear();
+    impl_->dict_buffer.reserve(30 * CAPTURE_SAMPLE_RATE); // 30s max dictation
     impl_->notifyStatus("⏺ Dictating…");
 }
 
@@ -243,11 +247,8 @@ void AppController::onHotkeyUp() {
 // ── Session recording ─────────────────────────────────────────────────────────
 
 void AppController::startSession() {
-    int expected = MODE_IDLE;
-    if (!impl_->mode.compare_exchange_strong(expected, MODE_RECORDING))
-        return;
-
-    // Build session ID: YYYYMMDD_HHMMSS
+    // Build session ID and set OutputWriter BEFORE changing mode to RECORDING,
+    // so the worker already has a writer when the first audio frames arrive.
     time_t t = std::time(nullptr);
     struct tm tm_info;
     localtime_r(&t, &tm_info);
@@ -257,7 +258,18 @@ void AppController::startSession() {
     impl_->session_writer = std::make_unique<OutputWriter>(
         impl_->output_dir, session_id, impl_->model_path, impl_->language
     );
+    impl_->session_writer->setOnError([this](const std::string& msg) {
+        impl_->notifyStatus("⚠ " + msg);
+    });
     impl_->worker->setOutputWriter(impl_->session_writer.get());
+
+    int expected = MODE_IDLE;
+    if (!impl_->mode.compare_exchange_strong(expected, MODE_RECORDING)) {
+        // Another mode was active — roll back.
+        impl_->worker->setOutputWriter(nullptr);
+        impl_->session_writer.reset();
+        return;
+    }
 
     impl_->notifyStatus("🔴 Listening…");
 }

@@ -26,7 +26,8 @@ public:
     WhisperWorker& operator=(const WhisperWorker&) = delete;
 
     // Optional: attach an OutputWriter before calling start().
-    void setOutputWriter(OutputWriter* writer) { output_writer_ = writer; }
+    // Thread-safe: acquires mutex_ so the worker thread sees a consistent pointer.
+    void setOutputWriter(OutputWriter* writer);
 
     // Optional: enable WAV saving. wav_dir must exist (or be created by caller).
     void setSaveWav(bool enable, const std::string& wav_dir) {

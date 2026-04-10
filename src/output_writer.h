@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -24,6 +25,10 @@ public:
     // Atomically flush all segments to disk (JSON + TXT). Called after every chunk.
     void flush();
 
+    // Optional: callback invoked when a file write fails (disk full, dir removed, etc.).
+    // Called from flush(), which runs on the WhisperWorker thread.
+    void setOnError(std::function<void(std::string)> cb) { on_error_ = std::move(cb); }
+
     const std::string& jsonPath() const { return json_path_; }
     const std::string& txtPath()  const { return txt_path_;  }
 
@@ -42,4 +47,5 @@ private:
 
     std::vector<Segment> segments_;
     std::mutex           mutex_;
+    std::function<void(std::string)> on_error_;
 };

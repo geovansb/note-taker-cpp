@@ -65,6 +65,11 @@ void WhisperWorker::setTranslate(bool translate) {
     translate_ = translate;
 }
 
+void WhisperWorker::setOutputWriter(OutputWriter* writer) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    output_writer_ = writer;
+}
+
 void WhisperWorker::setOnSessionDone(std::function<void()> cb) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -94,7 +99,8 @@ void WhisperWorker::workerLoop() {
     while (true) {
         ChunkItem item;
         std::string lang;
-        bool        do_translate = false;
+        bool           do_translate = false;
+        OutputWriter*  ow           = nullptr;
         {
             std::unique_lock<std::mutex> lock(mutex_);
             cv_.wait(lock, [this] {
@@ -114,8 +120,9 @@ void WhisperWorker::workerLoop() {
             if (stop_flag_ && queue_.empty()) break;
             item         = std::move(queue_.front());
             queue_.pop();
-            lang         = language_;   // snapshot under mutex
+            lang         = language_;        // snapshot under mutex
             do_translate = translate_;
+            ow           = output_writer_;   // snapshot under mutex
         }
 
         // Optional WAV save — before transcription so it's always complete.
@@ -171,10 +178,10 @@ void WhisperWorker::workerLoop() {
             fflush(stdout);
 
             // Session path: add to OutputWriter with absolute timestamps.
-            if (!item.is_dictation && output_writer_) {
+            if (!item.is_dictation && ow) {
                 int64_t t0_ms = chunk_offset_ms + whisper_full_get_segment_t0(ctx_, i) * 10;
                 int64_t t1_ms = chunk_offset_ms + whisper_full_get_segment_t1(ctx_, i) * 10;
-                output_writer_->addSegment(t0_ms, t1_ms, text);
+                ow->addSegment(t0_ms, t1_ms, text);
             }
         }
 
@@ -184,7 +191,7 @@ void WhisperWorker::workerLoop() {
                 on_result_(full_text);
             }
         } else {
-            if (output_writer_) output_writer_->flush();
+            if (ow) ow->flush();
 
             // After flushing a session chunk, check if the queue is now empty
             // and a session-done callback is waiting.

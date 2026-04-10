@@ -6,6 +6,7 @@
 #include <ctime>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 using json = nlohmann::json;
 
@@ -15,16 +16,24 @@ static void mkdir_p(const std::string& path) {
     }
 }
 
-static void write_atomic(const std::string& path, const std::string& content) {
+// Returns true on success. On failure, cleans up temp file and returns false.
+static bool write_atomic(const std::string& path, const std::string& content) {
     std::string tmp = path + ".tmp";
     int fd = open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    FILE* f = fd >= 0 ? fdopen(fd, "w") : nullptr;
+    if (fd < 0) {
+        fprintf(stderr, "warn: cannot open %s: %s\n", tmp.c_str(), strerror(errno));
+        return false;
+    }
+    FILE* f = fdopen(fd, "w");
     if (!f) {
-        fprintf(stderr, "warn: cannot write %s: %s\n", tmp.c_str(), strerror(errno));
-        return;
+        fprintf(stderr, "warn: fdopen %s: %s\n", tmp.c_str(), strerror(errno));
+        close(fd);
+        unlink(tmp.c_str());
+        return false;
     }
     size_t written = fwrite(content.c_str(), 1, content.size(), f);
-    if (written != content.size()) {
+    bool ok = (written == content.size());
+    if (!ok) {
         fprintf(stderr, "warn: short write to %s (%zu/%zu bytes): %s\n",
                 tmp.c_str(), written, content.size(), strerror(errno));
     }
@@ -32,7 +41,10 @@ static void write_atomic(const std::string& path, const std::string& content) {
     if (rename(tmp.c_str(), path.c_str()) != 0) {
         fprintf(stderr, "warn: rename %s -> %s: %s\n",
                 tmp.c_str(), path.c_str(), strerror(errno));
+        unlink(tmp.c_str());
+        return false;
     }
+    return ok;
 }
 
 // Format ms-since-epoch as HH:MM:SS (local time).
@@ -68,8 +80,10 @@ void OutputWriter::flush() {
     std::vector<Segment> snap;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        snap = segments_;
+        snap = std::move(segments_);
     }
+
+    if (snap.empty()) return;
 
     // JSON
     json doc;
@@ -84,7 +98,9 @@ void OutputWriter::flush() {
             {"text",     s.text}
         });
     }
-    write_atomic(json_path_, doc.dump(2) + "\n");
+    if (!write_atomic(json_path_, doc.dump(2) + "\n")) {
+        if (on_error_) on_error_("Failed to write " + json_path_);
+    }
 
     // Plain-text transcript: one line per segment
     std::string txt;
@@ -93,5 +109,7 @@ void OutputWriter::flush() {
         txt += s.text;
         txt += '\n';
     }
-    write_atomic(txt_path_, txt);
+    if (!write_atomic(txt_path_, txt)) {
+        if (on_error_) on_error_("Failed to write " + txt_path_);
+    }
 }

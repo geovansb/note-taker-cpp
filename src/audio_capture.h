@@ -19,6 +19,10 @@ public:
     bool start(std::function<void(const float*, size_t)> on_block);
     void stop();
 
+    // Optional: callback when the audio configuration changes (device unplugged,
+    // format change, etc.). Called from the notification thread.
+    void setOnConfigChange(std::function<void()> cb);
+
     // Enumerates audio input devices. Format: "<idx>: <name> [<uid>]"
     static std::vector<std::string> listDevices();
 

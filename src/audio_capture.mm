@@ -8,6 +8,8 @@ struct AudioCapture::Impl {
     AVAudioEngine*    engine    = nil;
     AVAudioConverter* converter = nil;
     AVAudioPCMBuffer* outBuf   = nil;  // reused across tap callbacks
+    id                configObserver = nil;
+    std::function<void()> on_config_change;
 };
 
 AudioCapture::AudioCapture() : impl_(new Impl()) {}
@@ -105,6 +107,27 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
         }
     }];
 
+    // Monitor audio configuration changes (device unplug, format change).
+    AVAudioEngine* engineRef = impl_->engine;
+    auto& changeCb = impl_->on_config_change;
+    impl_->configObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:AVAudioEngineConfigurationChangeNotification
+                    object:impl_->engine
+                     queue:nil
+                usingBlock:^(NSNotification*) {
+        fprintf(stderr, "warn: audio configuration changed (device unplug?)\n");
+        // Try to restart the engine so capture resumes with the new default device.
+        if (engineRef) {
+            NSError* restartErr = nil;
+            [engineRef startAndReturnError:&restartErr];
+            if (restartErr) {
+                fprintf(stderr, "warn: engine restart failed: %s\n",
+                        restartErr.localizedDescription.UTF8String);
+            }
+        }
+        if (changeCb) changeCb();
+    }];
+
     NSError* err = nil;
     [impl_->engine startAndReturnError:&err];
     if (err) {
@@ -117,6 +140,10 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
 }
 
 void AudioCapture::stop() {
+    if (impl_->configObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:impl_->configObserver];
+        impl_->configObserver = nil;
+    }
     if (impl_->engine) {
         [impl_->engine.inputNode removeTapOnBus:0];
         [impl_->engine stop];
@@ -124,6 +151,10 @@ void AudioCapture::stop() {
         impl_->outBuf    = nil;
         impl_->engine    = nil;
     }
+}
+
+void AudioCapture::setOnConfigChange(std::function<void()> cb) {
+    impl_->on_config_change = std::move(cb);
 }
 
 std::vector<std::string> AudioCapture::listDevices() {

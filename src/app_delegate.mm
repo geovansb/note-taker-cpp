@@ -46,10 +46,39 @@ static NSString* const kOutputDirKey   = @"output_dir";
     _activeModel  = _model;  // loaded model = selected at launch
     _hotkeyCode   = (int)[[NSUserDefaults standardUserDefaults] integerForKey:kHotkeyKey];
 
-    // Request notification permission (fire-and-forget; no-op if already granted).
-    [[UNUserNotificationCenter currentNotificationCenter]
-        requestAuthorizationWithOptions:UNAuthorizationOptionAlert
-                      completionHandler:^(BOOL, NSError*) {}];
+    // Request notification permission and set ourselves as delegate so
+    // notifications display even when the app is in the foreground.
+    UNUserNotificationCenter* nc = [UNUserNotificationCenter currentNotificationCenter];
+    nc.delegate = self;
+    [nc requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
+                      completionHandler:^(BOOL granted, NSError* err) {
+        if (!granted) {
+            NSLog(@"[note-taker] Notification permission not granted: %@", err);
+        }
+    }];
+
+    // Monitor sleep/wake to handle audio interruption gracefully.
+    __weak AppDelegate* weakSelfForSleep = self;
+    [[[NSWorkspace sharedWorkspace] notificationCenter]
+        addObserverForName:NSWorkspaceWillSleepNotification
+                    object:nil queue:nil
+                usingBlock:^(NSNotification*) {
+        AppDelegate* d = weakSelfForSleep;
+        if (!d) return;
+        NSLog(@"[note-taker] System will sleep — audio capture paused");
+    }];
+    [[[NSWorkspace sharedWorkspace] notificationCenter]
+        addObserverForName:NSWorkspaceDidWakeNotification
+                    object:nil queue:nil
+                usingBlock:^(NSNotification*) {
+        AppDelegate* d = weakSelfForSleep;
+        if (!d || !d->_controller) return;
+        NSLog(@"[note-taker] System woke — audio capture resumed");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            AppDelegate* d2 = weakSelfForSleep;
+            if (d2) [d2 setStatusTitle:@"⚠ Audio resumed after sleep"];
+        });
+    }];
 
     [self setupStatusItem];
     [self startController];
@@ -482,6 +511,14 @@ static NSString* const kOutputDirKey   = @"output_dir";
     alert.alertStyle = NSAlertStyleInformational;
     [alert addButtonWithTitle:@"OK"];
     [alert runModal];
+}
+
+// UNUserNotificationCenterDelegate — present notifications even when the app
+// is in the foreground (menu bar apps are always technically "active").
+- (void)userNotificationCenter:(UNUserNotificationCenter*)__unused center
+       willPresentNotification:(UNNotification*)__unused notification
+         withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
+    completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionSound);
 }
 
 - (void)postSessionSavedNotification {
