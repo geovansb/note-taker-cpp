@@ -128,7 +128,7 @@ worker thread    →  WhisperWorker → injectText() OR OutputWriter
 - [x] **T4.2** `src/event_tap.mm/h` — CGEventTap on CFRunLoop thread; Right Option hotkey; `kCGEventFlagsChanged` mask
 - [x] **T4.3** `src/app_controller.cpp/h` — owns pipeline; state machine; hotkey + session APIs
 - [x] **T4.4** `src/text_injector.mm/h` — NSPasteboard save/restore + simulated Cmd+V
-- [x] **T4.5** Language submenu (auto/pt/en/es/fr/de) + Model submenu (large-v3/medium/base) + dynamic menu bar icon + NSUserDefaults persistence
+- [x] **T4.5** Language submenu (auto/pt/en/es) + Model submenu (large-v3/large-v3-turbo) + dynamic menu bar icon + NSUserDefaults persistence
 - [~] **T4.6** Start at Login — **deferred** (prototype phase; use `scripts/start.sh` instead)
 
 ### Key implementation notes
@@ -156,7 +156,7 @@ worker thread    →  WhisperWorker → injectText() OR OutputWriter
 ./scripts/download_model.sh large-v3-turbo  # ~1.5 GB
 
 # CLI tool (M1–M3)
-./build/note-taker --model models/ggml-base.bin
+./build/note-taker --model models/ggml-large-v3.bin
 ./build/note-taker --list-devices
 
 # Unit tests
