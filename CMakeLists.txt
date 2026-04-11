@@ -22,44 +22,6 @@ option(GGML_METAL "Enable Metal GPU acceleration (Apple Silicon)" ON)
 
 add_subdirectory(whisper.cpp)
 
-add_executable(note-taker
-    src/main.cpp
-    src/audio_capture.mm
-    src/vad.cpp
-    src/chunk_assembler.cpp
-    src/whisper_worker.cpp
-    src/output_writer.cpp
-    src/wav_writer.cpp
-)
-target_include_directories(note-taker PRIVATE src third_party whisper.cpp/include)
-target_compile_options(note-taker PRIVATE
-    -Wall -Wextra -Wno-unused-parameter
-    $<$<AND:$<BOOL:${NOTETAKER_NATIVE_ARCH}>,$<CONFIG:Release>>:-march=native>
-)
-
-target_link_libraries(note-taker PRIVATE
-    whisper
-    "-framework AVFoundation"
-    "-framework CoreAudio"
-    "-framework Foundation"
-    "-framework AudioToolbox"
-)
-
-# Embed Info.plist into the binary so AVFoundation can find
-# NSMicrophoneUsageDescription (required even for CLI tools on macOS 14+).
-target_link_options(note-taker PRIVATE
-    "LINKER:-sectcreate,__TEXT,__info_plist,${CMAKE_CURRENT_SOURCE_DIR}/Info.plist"
-)
-
-# Ad-hoc sign with audio-input entitlement so TCC grants microphone access.
-add_custom_command(TARGET note-taker POST_BUILD
-    COMMAND codesign --force --sign -
-            --entitlements "${CMAKE_CURRENT_SOURCE_DIR}/entitlements.plist"
-            --options runtime
-            "$<TARGET_FILE:note-taker>"
-    COMMENT "Signing note-taker with audio-input entitlement"
-)
-
 # ── note-taker-bar: unified menu bar app (M4) ────────────────────────────────
 
 add_executable(note-taker-bar MACOSX_BUNDLE
