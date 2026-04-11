@@ -15,7 +15,8 @@ Both modes share a single Whisper model loaded in memory. Metal GPU acceleration
 
 - macOS 11+
 - CMake 3.22+
-- Apple Clang (ships with Xcode Command Line Tools)
+- Xcode (full app, not just Command Line Tools)
+- **Metal Toolchain** — required for GPU shader compilation. Open Xcode → Settings → Components and install **Metal Toolchain** under "Other Components". Without it, the CMake build will fail when compiling Metal shaders.
 - ~1.5–3.1 GB disk space for the model
 
 ## Quick Start
