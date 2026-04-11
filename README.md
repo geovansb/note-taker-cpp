@@ -150,32 +150,6 @@ Shows the currently loaded model. Select a different one to queue it for the nex
 
 ---
 
-## CLI Tool
-
-A standalone CLI binary is also built for scripting or headless use:
-
-```sh
-# Basic usage
-./build/note-taker --model models/ggml-large-v3-turbo.bin
-
-# With options
-./build/note-taker \
-  --model models/ggml-large-v3-turbo.bin \
-  --language pt \
-  --translate \
-  --metal \
-  --output-dir ~/meeting-notes \
-  --chunk-seconds 20 \
-  --save-wav
-
-# List audio devices
-./build/note-taker --list-devices
-```
-
-The CLI uses the same pipeline as the menu bar app but writes output to the terminal and files without any GUI.
-
----
-
 ## Architecture
 
 ```
@@ -228,9 +202,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON
 cmake --build build --parallel
 ```
 
-The build produces two binaries:
-- `build/note-taker` — CLI tool
-- `build/note-taker-bar.app` — menu bar app bundle
+The build produces `build/note-taker-bar.app` — the menu bar app bundle.
 
 ---
 

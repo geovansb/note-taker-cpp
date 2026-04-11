@@ -12,8 +12,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 
 # Run
-./build/note-taker
-./build/note-taker --list-devices
+./scripts/start.sh
 ```
 
 Binary is portable across all Apple Silicon Macs by default (`-march=native` is off).

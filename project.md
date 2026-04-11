@@ -14,7 +14,6 @@ note-taker/
 ├── project.md
 ├── whisper.cpp/                  ← git submodule (ggerganov/whisper.cpp)
 ├── src/
-│   ├── main.cpp                  ← CLI entry point (note-taker binary)
 │   ├── bar_main.mm               ← App bundle entry point (note-taker-bar)
 │   ├── constants.h               ← all constexpr numeric constants
 │   ├── audio_capture.mm/h        ← AVAudioEngine, 16kHz mono float32
@@ -38,7 +37,6 @@ note-taker/
 │   ├── build.sh                  ← cmake + Metal + tccutil reset
 │   └── start.sh                  ← open build/note-taker-bar.app
 ├── third_party/
-│   ├── CLI11.hpp
 │   └── nlohmann/json.hpp
 └── models/                       ← gitignored; place ggml-*.bin here
 ```
@@ -154,10 +152,6 @@ worker thread    →  WhisperWorker → injectText() OR OutputWriter
 # Download models
 ./scripts/download_model.sh large-v3        # ~3.1 GB
 ./scripts/download_model.sh large-v3-turbo  # ~1.5 GB
-
-# CLI tool (M1–M3)
-./build/note-taker --model models/ggml-large-v3.bin
-./build/note-taker --list-devices
 
 # Unit tests
 ./build/vad_test

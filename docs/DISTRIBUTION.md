@@ -12,27 +12,18 @@ No `-march=native` — runs on any Apple Silicon Mac (M1, M2, M3, M4, ...).
 
 ## What to copy
 
-### CLI app (`note-taker`)
-
-| File | Description |
-|------|-------------|
-| `build/note-taker` | The binary (~10 MB) |
-| `models/ggml-large-v3-turbo.bin` | Whisper model (~1.6 GB) |
-
-### Menu bar app (`note-taker-bar`)
-
 | File | Description |
 |------|-------------|
 | `build/note-taker-bar.app/` | The app bundle (includes Metal shaders) |
 | `models/ggml-large-v3-turbo.bin` | Whisper model (~1.6 GB) |
 
-The bar app expects the `models/` directory to be at `../models/` relative to the `.app` bundle.
+The app expects the `models/` directory to be at `../models/` relative to the `.app` bundle.
 
 ### Recommended layout on the target Mac
 
 ```
 ~/note-taker/
-  note-taker              # or note-taker-bar.app/
+  note-taker-bar.app/
   models/
     ggml-large-v3-turbo.bin
 ```
