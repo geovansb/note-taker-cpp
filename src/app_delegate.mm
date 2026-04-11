@@ -34,7 +34,7 @@ static NSString* const kOutputDirKey   = @"output_dir";
     NSString* defaultNotesDir = [NSHomeDirectory() stringByAppendingPathComponent:@"notes"];
     [[NSUserDefaults standardUserDefaults] registerDefaults:@{
         kLangKey:        @"auto",
-        kModelKey:       @"large-v3",
+        kModelKey:       @"large-v3-turbo",
         kHotkeyKey:      @(kVK_RightOption),
         kSensitivityKey: @"medium",
         kSilenceKey:     @5.0,

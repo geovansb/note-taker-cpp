@@ -3,7 +3,7 @@
 # Usage: ./scripts/download_model.sh [base|small|medium|large-v3|large-v3-turbo|...]
 set -euo pipefail
 
-MODEL="${1:-large-v3}"
+MODEL="${1:-large-v3-turbo}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MODELS_DIR="$ROOT/models"
 SCRIPT="$ROOT/whisper.cpp/models/download-ggml-model.sh"

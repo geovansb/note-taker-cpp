@@ -37,7 +37,7 @@ int main(int argc, char* argv[]) {
     CLI::App app{"note-taker — macOS microphone transcriber"};
     app.set_version_flag("--version", "4.0.0");
 
-    std::string model_path   = "models/ggml-large-v3.bin";
+    std::string model_path   = "models/ggml-large-v3-turbo.bin";
     std::string output_dir   = "notes";
     std::string language     = "auto";
     float       chunk_seconds = DEFAULT_CHUNK_S;
