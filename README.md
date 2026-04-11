@@ -22,7 +22,7 @@ Both modes share a single Whisper model loaded in memory. Metal GPU acceleration
 
 ```sh
 # Clone with submodules
-git clone --recurse-submodules https://github.com/<you>/note-taker-cpp.git
+git clone --recurse-submodules https://github.com/geovansb/note-taker-cpp.git
 cd note-taker-cpp
 
 # Download a model (see "Choosing a Model" below)
