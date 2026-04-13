@@ -206,5 +206,3 @@ worker thread    →  WhisperWorker → injectText() OR OutputWriter
 ## Backlog
 
 - **Start at Login** — LaunchAgent plist; add "Start at Login" checkbox to menu (T4.6)
-- **Notifications** — `UNUserNotificationCenter` when session file is written
-- **HuggingFace token support** — accept `HF_TOKEN` in download_model.sh for authenticated downloads
