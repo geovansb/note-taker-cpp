@@ -64,4 +64,4 @@ CoreAudio tap (audio thread)
 
 ## Project status
 
-All milestones (M1–M5) are complete. See `project.md` for details.
+All milestones (M1–M5) are complete. See `docs/project.md` for details.
