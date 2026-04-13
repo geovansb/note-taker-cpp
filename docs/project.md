@@ -52,6 +52,8 @@ note-taker/
 | M3 | Full CLI flags + JSON/TXT output + optional WAV save | ✅ |
 | M4 | Menu bar app: dictation + session recording | ✅ |
 | M5 | Hardening & UX polish (H1–H12) | ✅ |
+| M6 | File transcription: audio/video file input | 🔲 |
+| M7 | Transcript history search | 🔲 |
 
 ---
 
@@ -200,6 +202,55 @@ worker thread    →  WhisperWorker → injectText() OR OutputWriter
 | H10 | VoiceOver accessibility labels on status button | app_delegate.mm | ✅ |
 | H11 | Configurable hotkey (setHotkey exists, needs UI) | event_tap.mm, app_delegate.mm | ✅ |
 | H12 | Show current lang/model in main menu | app_delegate.mm | ✅ |
+
+---
+
+## M6 — File Transcription 🔲
+
+**Goal:** Transcribe audio or video files (MP3, MP4, M4A, WAV, MOV, etc.) directly from the menu bar app — no live recording required.
+
+**Acceptance:** User selects a file via the menu; app decodes it, runs Whisper, and saves the transcript to `~/notes/` in the same JSON+TXT format as session recordings.
+
+### Design notes
+
+- Decode via `AVAssetReader` to 16kHz mono float32 — the same format WhisperWorker expects.
+- Does **not** reuse `WhisperWorker` (its drop-oldest policy is unacceptable for files). Instead, calls `whisper_full` directly on a dedicated thread with the native Whisper progress callback.
+- File transcription is mutually exclusive with dictation and session recording (`FILE_TRANSCRIBING` state in AppController).
+- Output named after the source file: `note_<filename>_<timestamp>.json/.txt`.
+
+### Tasks
+
+- [ ] **T6.1** "Transcribe File…" menu item + `NSOpenPanel` filtered by audio/video UTTypes
+- [ ] **T6.2** `src/file_decoder.mm/h` — `AVAssetReader` → PCM 16kHz mono float32 buffer in memory
+- [ ] **T6.3** `src/file_transcriber.mm/h` — calls `whisper_full` with progress callback, collects segments, saves via `OutputWriter`
+- [ ] **T6.4** New `FILE_TRANSCRIBING` state in `AppController` — blocks dictation and session recording while active
+- [ ] **T6.5** Progress feedback in menu bar (e.g. "Transcribing… 42%") via Whisper's progress callback
+- [ ] **T6.6** Output naming: `note_<filename>_<timestamp>.json/.txt`
+- [ ] **T6.7** Error handling: unsupported format, no audio track, decode failure, Whisper failure
+
+---
+
+## M7 — Transcript History Search 🔲
+
+**Goal:** Browse and search all past transcripts from the menu bar app without leaving it.
+
+**Acceptance:** "Search Transcripts" opens a panel listing all sessions in `~/notes/`. User types a query and sees matching segments with the ability to open the full transcript.
+
+### Design notes
+
+- Reads `.json` files from `~/notes/` on demand (no background daemon).
+- Case-insensitive substring search over segment text. No third-party search library needed — in-memory scan is fast enough for typical note volumes.
+- UI: `NSPanel` with `NSSearchField` + `NSTableView` showing date, filename, and a snippet with the match.
+- Double-click opens the corresponding `.txt` file via `NSWorkspace`.
+
+### Tasks
+
+- [ ] **T7.1** "Search Transcripts…" menu item (Cmd+F) + `NSPanel` skeleton
+- [ ] **T7.2** `src/transcript_index.mm/h` — scan `~/notes/*.json`, parse segments, build in-memory index on open
+- [ ] **T7.3** `NSSearchField` + `NSTableView` with columns: date, filename, matching snippet
+- [ ] **T7.4** Live filtering with debounce as user types
+- [ ] **T7.5** Double-click → open corresponding `.txt` via `NSWorkspace openURL:`
+- [ ] **T7.6** Empty states: "No transcripts found" / "No matches"
 
 ---
 
