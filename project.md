@@ -57,7 +57,7 @@ note-taker/
 
 ## M1 — Audio Capture + VAD + ChunkAssembler ✅
 
-**Acceptance met:** `./note-taker` prints `[CHUNK] duration=<ms>ms` on speech detection, exits cleanly on Ctrl-C.
+**Acceptance met:** AVAudioEngine captures mic, RMS VAD detects speech, ChunkAssembler produces chunks on silence.
 
 ### Tasks
 
@@ -66,37 +66,35 @@ note-taker/
 - [x] **T1.3** `src/audio_capture.mm/h` — AVAudioEngine + mic permission
 - [x] **T1.4** `src/vad.cpp/h` — RMS VAD; `vad_test` passes
 - [x] **T1.5** `src/chunk_assembler.cpp/h` — LISTENING/RECORDING state machine
-- [x] **T1.6** `src/main.cpp` M1 harness
 - [x] **T1.7** CMake: framework linking + `vad_test` target
 
 ---
 
 ## M2 — Whisper Integration ✅
 
-**Acceptance met:** Speech → transcriptions in terminal with `[HH:MM:SS]` prefix.
+**Acceptance met:** Speech chunks enqueued to WhisperWorker and transcribed with Metal GPU acceleration.
 
 ### Tasks
 
 - [x] **T2.1** whisper.cpp git submodule
 - [x] **T2.2** CMake: `add_subdirectory(whisper.cpp)`, Metal option
 - [x] **T2.3** `src/whisper_worker.cpp/h` — bounded queue, drop-oldest, `whisper_free`
-- [x] **T2.4** Wire WhisperWorker into `main.cpp`
 - [x] **T2.5** `scripts/download_model.sh`
 
 ---
 
-## M3 — Output + Full CLI ✅
+## M3 — Output Pipeline ✅
 
-**Acceptance met:** All CLI flags functional. Produces `notes/note_<timestamp>.json` + `.txt`. Ctrl-C writes complete output.
+**Acceptance met:** Produces `notes/note_<timestamp>.json` + `.txt` atomically. WAV save supported.
+
+> Note: M3 originally included a CLI binary (`note-taker`) that was removed in v4.0.0. The output pipeline (`OutputWriter`, `WavWriter`) is retained and used by the menu bar app.
 
 ### Tasks
 
-- [x] **T3.1** `third_party/CLI11.hpp`
 - [x] **T3.2** `third_party/nlohmann/json.hpp`
-- [x] **T3.3** Full CLI parsing (`--model`, `--output-dir`, `--language`, `--translate`, `--chunk-seconds`, `--metal`, `--list-devices`, `--save-wav`)
 - [x] **T3.4** `src/output_writer.cpp/h` — atomic JSON+TXT via `.tmp` → `rename()`
 - [x] **T3.5** `src/wav_writer.cpp/h` — RIFF + 16-bit PCM
-- [x] **T3.6** `--chunk-seconds` configurable in ChunkAssembler
+- [x] **T3.6** Configurable chunk duration in ChunkAssembler
 - [x] **T3.7** Wire OutputWriter + WAV into pipeline
 
 ---
@@ -162,15 +160,15 @@ worker thread    →  WhisperWorker → injectText() OR OutputWriter
 
 ## M4 Acceptance Checklist
 
-- [ ] App icon appears in menu bar after `./scripts/start.sh`
-- [ ] Status transitions: `● Idle` → `⏳ Loading model…` → `● Idle`
-- [ ] Menu bar icon changes: `mic.fill` (idle) / `waveform` (loading) / `mic` (dictating) / `record.circle.fill` (recording)
-- [ ] Hold Right Option → status shows `⏺ Dictating…` → release → `⏳ Transcribing…` → text injected at cursor → `● Idle`
-- [ ] Start Recording → `🔴 Recording` → speech produces `notes/note_*.json` + `.txt` → Stop Recording → `● Idle`
-- [ ] Language selection persists after Quit + relaunch
-- [ ] Model selection persists after Quit + relaunch
-- [ ] Open Notes Folder opens `~/notes` in Finder (creates dir if absent)
-- [ ] Quit cleanly drains WhisperWorker before exit
+- [x] App icon appears in menu bar after `./scripts/start.sh`
+- [x] Status transitions: `● Idle` → `⏳ Loading model…` → `● Idle`
+- [x] Menu bar icon changes: `mic.fill` (idle) / `waveform` (loading) / `mic` (dictating) / `record.circle.fill` (recording)
+- [x] Hold Right Option → status shows `⏺ Dictating…` → release → `⏳ Transcribing…` → text injected at cursor → `● Idle`
+- [x] Start Recording → `🔴 Recording` → speech produces `notes/note_*.json` + `.txt` → Stop Recording → `● Idle`
+- [x] Language selection persists after Quit + relaunch
+- [x] Model selection persists after Quit + relaunch
+- [x] Open Notes Folder opens `~/notes` in Finder (creates dir if absent)
+- [x] Quit cleanly drains WhisperWorker before exit
 
 ---
 
@@ -208,6 +206,5 @@ worker thread    →  WhisperWorker → injectText() OR OutputWriter
 ## Backlog
 
 - **Start at Login** — LaunchAgent plist; add "Start at Login" checkbox to menu (T4.6)
-- **VAD threshold tuning** — expose `VAD_RMS_THRESHOLD` and `SILENCE_TIMEOUT_S` as menu settings or `NSUserDefaults` keys
-- **Notifications** — `NSUserNotification` / `UNUserNotificationCenter` when session file is written
+- **Notifications** — `UNUserNotificationCenter` when session file is written
 - **HuggingFace token support** — accept `HF_TOKEN` in download_model.sh for authenticated downloads
