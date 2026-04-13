@@ -3,3 +3,4 @@ models/*.bin
 *.o
 *.dSYM
 .DS_Store
+.kilo/
