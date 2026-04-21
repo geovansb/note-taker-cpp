@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <functional>
 #include <mutex>
 #include <vector>
@@ -23,8 +24,8 @@ public:
 
     void feed(const float* samples, size_t n);
 
-    void setSilenceTimeout(float seconds) { silence_timeout_s_ = seconds; }
-    float silenceTimeout() const { return silence_timeout_s_; }
+    void setSilenceTimeout(float seconds) { silence_timeout_s_.store(seconds, std::memory_order_relaxed); }
+    float silenceTimeout() const { return silence_timeout_s_.load(std::memory_order_relaxed); }
 
     // Called on the tap thread when state transitions between LISTENING ↔ RECORDING.
     void setOnStateChange(OnStateCb cb) { on_state_ = std::move(cb); }
@@ -40,7 +41,7 @@ private:
 
     Vad&        vad_;
     float       max_chunk_s_;
-    float       silence_timeout_s_ = 5.0f;  // default SILENCE_TIMEOUT_S
+    std::atomic<float> silence_timeout_s_ { 5.0f };  // default SILENCE_TIMEOUT_S
     OnChunkCb   on_chunk_;
     OnStateCb   on_state_;
 
