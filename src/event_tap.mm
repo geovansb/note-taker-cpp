@@ -9,7 +9,7 @@
 #include <mutex>
 
 struct EventTapImpl {
-    int                      hotkey   = kVK_RightOption;
+    std::atomic<int>         hotkey   { kVK_RightOption };
     std::function<void()>    on_down;
     std::function<void()>    on_up;
     CFMachPortRef            tap      = nullptr;
@@ -37,7 +37,7 @@ static CGEventRef event_tap_callback(CGEventTapProxy __unused proxy,
     }
 
     int64_t keycode = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
-    if (keycode != impl->hotkey) return event;
+    if (keycode != impl->hotkey.load(std::memory_order_relaxed)) return event;
 
     if (type == kCGEventFlagsChanged) {
         // Modifier keys use FlagsChanged instead of KeyDown/KeyUp.
@@ -77,7 +77,7 @@ EventTap::~EventTap() {
 }
 
 void EventTap::setHotkey(int keycode) {
-    impl_->hotkey = keycode;
+    impl_->hotkey.store(keycode, std::memory_order_relaxed);
 }
 
 bool EventTap::start(std::function<void()> on_down, std::function<void()> on_up) {
