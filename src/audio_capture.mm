@@ -10,6 +10,7 @@ struct AudioCapture::Impl {
     AVAudioPCMBuffer* outBuf   = nil;  // reused across tap callbacks
     id                configObserver = nil;
     std::function<void()> on_config_change;
+    std::function<void()> on_recovery_failed;
     std::function<void(const float*, size_t)> on_block; // kept for tap reinstall
 
     // (Re)install tap + converter on the current engine's input node.
@@ -124,16 +125,46 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
         p->converter = nil;
         p->outBuf    = nil;
 
-        if (!p->installTap()) {
-            fprintf(stderr, "error: failed to reinstall tap after config change\n");
-        }
-        NSError* restartErr = nil;
-        [p->engine startAndReturnError:&restartErr];
-        if (restartErr) {
-            fprintf(stderr, "warn: engine restart failed: %s\n",
-                    restartErr.localizedDescription.UTF8String);
-        } else {
+        // Retry with backoff — the new device may not be ready immediately.
+        static const int    kMaxRetries = 3;
+        static const double kBackoffMs[] = { 200, 500, 1000 };
+        bool recovered = false;
+
+        for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
+            if (attempt > 0) {
+                fprintf(stderr, "info: retry %d/%d after %.0fms…\n",
+                        attempt + 1, kMaxRetries, kBackoffMs[attempt]);
+                [NSThread sleepForTimeInterval:kBackoffMs[attempt] / 1000.0];
+                // Re-prepare engine so it picks up the new device.
+                [p->engine.inputNode removeTapOnBus:0];
+                p->converter = nil;
+                p->outBuf    = nil;
+            }
+
+            if (!p->installTap()) {
+                fprintf(stderr, "warn: installTap failed (attempt %d/%d)\n",
+                        attempt + 1, kMaxRetries);
+                continue;
+            }
+
+            NSError* restartErr = nil;
+            [p->engine startAndReturnError:&restartErr];
+            if (restartErr) {
+                fprintf(stderr, "warn: engine restart failed (attempt %d/%d): %s\n",
+                        attempt + 1, kMaxRetries,
+                        restartErr.localizedDescription.UTF8String);
+                continue;
+            }
+
+            recovered = true;
             fprintf(stderr, "info: audio capture resumed after config change\n");
+            break;
+        }
+
+        if (!recovered) {
+            fprintf(stderr, "error: audio recovery failed after %d attempts — "
+                            "restart required\n", kMaxRetries);
+            if (p->on_recovery_failed) p->on_recovery_failed();
         }
         if (p->on_config_change) p->on_config_change();
     }];
@@ -165,6 +196,10 @@ void AudioCapture::stop() {
 
 void AudioCapture::setOnConfigChange(std::function<void()> cb) {
     impl_->on_config_change = std::move(cb);
+}
+
+void AudioCapture::setOnRecoveryFailed(std::function<void()> cb) {
+    impl_->on_recovery_failed = std::move(cb);
 }
 
 std::vector<std::string> AudioCapture::listDevices() {

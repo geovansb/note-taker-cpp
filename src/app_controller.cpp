@@ -164,6 +164,10 @@ bool AppController::start() {
     impl_->capture.setOnConfigChange([this] {
         impl_->notifyStatus(AppStatus::ErrorAudioDeviceChanged);
     });
+    impl_->capture.setOnRecoveryFailed([this] {
+        impl_->notifyStatus(AppStatus::ErrorGeneric,
+                            "Audio recovery failed — restart required");
+    });
     bool mic_ok = impl_->capture.start([this](const float* s, size_t n) {
         Mode m = impl_->mode_machine.mode();
         if (m == Mode::Dictating) {

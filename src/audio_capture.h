@@ -23,6 +23,10 @@ public:
     // format change, etc.). Called from the notification thread.
     void setOnConfigChange(std::function<void()> cb);
 
+    // Optional: callback when audio recovery fails after all retry attempts.
+    // The app is left without audio capture and a restart is needed.
+    void setOnRecoveryFailed(std::function<void()> cb);
+
     // Enumerates audio input devices. Format: "<idx>: <name> [<uid>]"
     static std::vector<std::string> listDevices();
 
