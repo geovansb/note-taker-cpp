@@ -4,94 +4,154 @@
 #include "wav_writer.h"
 #include "whisper.h"
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <ctime>
+#include <mutex>
+#include <queue>
+#include <thread>
 #include <utility>
+
+// ── Impl ──────────────────────────────────────────────────────────────────────
+
+struct WhisperWorker::Impl {
+    struct ChunkItem {
+        std::vector<float> samples;
+        int64_t            start_ms;     // wall-clock ms (Unix epoch)
+        bool               is_dictation; // true → call on_result, skip OutputWriter
+    };
+
+    // Config (set at construction)
+    std::string    model_path;
+    bool           use_metal  = false;
+    std::string    language;
+    bool           translate  = false;
+
+    // Runtime state
+    OutputWriter*  output_writer = nullptr;
+    bool           save_wav      = false;
+    std::string    wav_dir;
+    int64_t        session_start_ms = 0;
+    int            wav_chunk_idx    = 0;
+
+    // Callbacks (set before start, except on_session_done)
+    std::function<void(const std::string&)> on_result;
+    std::function<void(const std::string&)> on_error;
+    std::function<void()>                   on_session_done;
+
+    // Whisper context — not thread-safe, only used from workerLoop
+    whisper_context* ctx = nullptr;
+
+    // Threading
+    std::thread             thread;
+    std::mutex              mutex;
+    std::condition_variable cv;
+    std::queue<ChunkItem>   queue;
+    bool                    stop_flag = false;
+};
+
+// ── WhisperWorker ─────────────────────────────────────────────────────────────
 
 WhisperWorker::WhisperWorker(const std::string& model_path,
                              bool               use_metal,
                              const std::string& language,
                              bool               translate)
-    : model_path_(model_path)
-    , use_metal_(use_metal)
-    , language_(language)
-    , translate_(translate)
-{}
+    : impl_(new Impl{})
+{
+    impl_->model_path = model_path;
+    impl_->use_metal  = use_metal;
+    impl_->language   = language;
+    impl_->translate  = translate;
+}
 
 WhisperWorker::~WhisperWorker() {
     stop();
+    delete impl_;
+}
+
+void WhisperWorker::setSaveWav(bool enable, const std::string& wav_dir) {
+    impl_->save_wav = enable;
+    impl_->wav_dir  = wav_dir;
+}
+
+void WhisperWorker::setOnResult(std::function<void(const std::string&)> cb) {
+    impl_->on_result = std::move(cb);
+}
+
+void WhisperWorker::setOnError(std::function<void(const std::string&)> cb) {
+    impl_->on_error = std::move(cb);
+}
+
+void WhisperWorker::setOnSessionDone(std::function<void()> cb) {
+    {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        impl_->on_session_done = std::move(cb);
+        // Wake the worker in case the queue is already empty — it will check
+        // the callback and fire it without waiting for a new item to arrive.
+        impl_->cv.notify_one();
+    }
+}
+
+void WhisperWorker::setLanguage(const std::string& lang) {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->language = lang;
+}
+
+void WhisperWorker::setTranslate(bool translate) {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->translate = translate;
+}
+
+void WhisperWorker::setOutputWriter(OutputWriter* writer) {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->output_writer = writer;
 }
 
 bool WhisperWorker::start() {
     whisper_context_params cparams = whisper_context_default_params();
-    cparams.use_gpu = use_metal_;
+    cparams.use_gpu = impl_->use_metal;
 
-    fprintf(stderr, "info: loading model %s ...\n", model_path_.c_str());
-    ctx_ = whisper_init_from_file_with_params(model_path_.c_str(), cparams);
-    if (!ctx_) {
-        fprintf(stderr, "error: failed to load model: %s\n", model_path_.c_str());
+    fprintf(stderr, "info: loading model %s ...\n", impl_->model_path.c_str());
+    impl_->ctx = whisper_init_from_file_with_params(impl_->model_path.c_str(), cparams);
+    if (!impl_->ctx) {
+        fprintf(stderr, "error: failed to load model: %s\n", impl_->model_path.c_str());
         return false;
     }
     fprintf(stderr, "info: model loaded\n");
 
-    session_start_ms_ =
+    impl_->session_start_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
 
-    stop_flag_ = false;
-    thread_ = std::thread(&WhisperWorker::workerLoop, this);
+    impl_->stop_flag = false;
+    impl_->thread = std::thread(&WhisperWorker::workerLoop, this);
     return true;
 }
 
 void WhisperWorker::enqueue(std::vector<float> chunk, int64_t chunk_start_ms,
                             bool is_dictation) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (queue_.size() >= static_cast<size_t>(PROCESSING_QUEUE_MAX)) {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (impl_->queue.size() >= static_cast<size_t>(PROCESSING_QUEUE_MAX)) {
         fprintf(stderr, "warn: transcription queue full, dropping oldest chunk\n");
-        queue_.pop();
-        if (on_error_) on_error_("Transcription queue full — audio chunk dropped");
+        impl_->queue.pop();
+        if (impl_->on_error) impl_->on_error("Transcription queue full — audio chunk dropped");
     }
-    queue_.push({std::move(chunk), chunk_start_ms, is_dictation});
-    cv_.notify_one();
-}
-
-void WhisperWorker::setLanguage(const std::string& lang) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    language_ = lang;
-}
-
-void WhisperWorker::setTranslate(bool translate) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    translate_ = translate;
-}
-
-void WhisperWorker::setOutputWriter(OutputWriter* writer) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    output_writer_ = writer;
-}
-
-void WhisperWorker::setOnSessionDone(std::function<void()> cb) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        on_session_done_ = std::move(cb);
-        // Wake the worker in case the queue is already empty — it will check
-        // the callback and fire it without waiting for a new item to arrive.
-        cv_.notify_one();
-    }
+    impl_->queue.push({std::move(chunk), chunk_start_ms, is_dictation});
+    impl_->cv.notify_one();
 }
 
 void WhisperWorker::stop() {
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stop_flag_ = true;
-        cv_.notify_all();
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        impl_->stop_flag = true;
+        impl_->cv.notify_all();
     }
-    if (thread_.joinable()) {
-        thread_.join();
+    if (impl_->thread.joinable()) {
+        impl_->thread.join();
     }
-    if (ctx_) {
-        whisper_free(ctx_);
-        ctx_ = nullptr;
+    if (impl_->ctx) {
+        whisper_free(impl_->ctx);
+        impl_->ctx = nullptr;
     }
 }
 
@@ -107,39 +167,39 @@ void WhisperWorker::workerLoop() {
     params.single_segment   = false;
 
     while (true) {
-        ChunkItem item;
+        Impl::ChunkItem item;
         std::string lang;
         bool           do_translate = false;
         OutputWriter*  ow           = nullptr;
         {
-            std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] {
-                return stop_flag_ || !queue_.empty() || on_session_done_ != nullptr;
+            std::unique_lock<std::mutex> lock(impl_->mutex);
+            impl_->cv.wait(lock, [this] {
+                return impl_->stop_flag || !impl_->queue.empty() || impl_->on_session_done != nullptr;
             });
 
-            // If the queue is empty but on_session_done_ is set, all pending
+            // If the queue is empty but on_session_done is set, all pending
             // session chunks have been processed — fire the callback and clear it.
-            if (queue_.empty() && on_session_done_) {
-                auto cb = std::move(on_session_done_);
-                on_session_done_ = nullptr;
+            if (impl_->queue.empty() && impl_->on_session_done) {
+                auto cb = std::move(impl_->on_session_done);
+                impl_->on_session_done = nullptr;
                 lock.unlock();
                 cb();
                 continue;
             }
 
-            if (stop_flag_ && queue_.empty()) break;
-            item         = std::move(queue_.front());
-            queue_.pop();
-            lang         = language_;        // snapshot under mutex
-            do_translate = translate_;
-            ow           = output_writer_;   // snapshot under mutex
+            if (impl_->stop_flag && impl_->queue.empty()) break;
+            item         = std::move(impl_->queue.front());
+            impl_->queue.pop();
+            lang         = impl_->language;        // snapshot under mutex
+            do_translate = impl_->translate;
+            ow           = impl_->output_writer;   // snapshot under mutex
         }
 
         // Optional WAV save — before transcription so it's always complete.
-        if (save_wav_ && !wav_dir_.empty()) {
+        if (impl_->save_wav && !impl_->wav_dir.empty()) {
             char wav_name[64];
-            snprintf(wav_name, sizeof(wav_name), "/chunk_%03d.wav", wav_chunk_idx_++);
-            writeWav(wav_dir_ + wav_name,
+            snprintf(wav_name, sizeof(wav_name), "/chunk_%03d.wav", impl_->wav_chunk_idx++);
+            writeWav(impl_->wav_dir + wav_name,
                      item.samples.data(), item.samples.size(),
                      WHISPER_SAMPLE_RATE);
         }
@@ -148,12 +208,12 @@ void WhisperWorker::workerLoop() {
         params.language  = lang.empty() ? "auto" : lang.c_str();
         params.translate = do_translate;
 
-        int rc = whisper_full(ctx_, params,
+        int rc = whisper_full(impl_->ctx, params,
                               item.samples.data(),
                               static_cast<int>(item.samples.size()));
         if (rc != 0) {
             fprintf(stderr, "warn: whisper_full returned %d\n", rc);
-            if (on_error_) on_error_("Transcription failed (whisper error " + std::to_string(rc) + ")");
+            if (impl_->on_error) impl_->on_error("Transcription failed (whisper error " + std::to_string(rc) + ")");
             continue;
         }
 
@@ -165,13 +225,13 @@ void WhisperWorker::workerLoop() {
         strftime(ts, sizeof(ts), "%H:%M:%S", &tm_info);
 
         // Offset of chunk start relative to session start (for OutputWriter).
-        int64_t chunk_offset_ms = item.start_ms - session_start_ms_;
+        int64_t chunk_offset_ms = item.start_ms - impl_->session_start_ms;
 
-        int         n         = whisper_full_n_segments(ctx_);
+        int         n         = whisper_full_n_segments(impl_->ctx);
         std::string full_text;  // accumulates all segments (used for dictation callback)
 
         for (int i = 0; i < n; ++i) {
-            const char* text = whisper_full_get_segment_text(ctx_, i);
+            const char* text = whisper_full_get_segment_text(impl_->ctx, i);
             if (!text || text[0] == '\0') continue;
 
             full_text += text;
@@ -181,16 +241,16 @@ void WhisperWorker::workerLoop() {
 
             // Session path: add to OutputWriter with absolute timestamps.
             if (!item.is_dictation && ow) {
-                int64_t t0_ms = chunk_offset_ms + whisper_full_get_segment_t0(ctx_, i) * 10;
-                int64_t t1_ms = chunk_offset_ms + whisper_full_get_segment_t1(ctx_, i) * 10;
+                int64_t t0_ms = chunk_offset_ms + whisper_full_get_segment_t0(impl_->ctx, i) * 10;
+                int64_t t1_ms = chunk_offset_ms + whisper_full_get_segment_t1(impl_->ctx, i) * 10;
                 ow->addSegment(t0_ms, t1_ms, text);
             }
         }
 
         if (item.is_dictation) {
             // Dictation path: fire on_result callback (AppController resets mode to IDLE).
-            if (on_result_ && !full_text.empty()) {
-                on_result_(full_text);
+            if (impl_->on_result && !full_text.empty()) {
+                impl_->on_result(full_text);
             }
         } else {
             if (ow) ow->flush();
@@ -199,10 +259,10 @@ void WhisperWorker::workerLoop() {
             // and a session-done callback is waiting.
             std::function<void()> done_cb;
             {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (queue_.empty() && on_session_done_) {
-                    done_cb = std::move(on_session_done_);
-                    on_session_done_ = nullptr;
+                std::lock_guard<std::mutex> lock(impl_->mutex);
+                if (impl_->queue.empty() && impl_->on_session_done) {
+                    done_cb = std::move(impl_->on_session_done);
+                    impl_->on_session_done = nullptr;
                 }
             }
             if (done_cb) done_cb();

@@ -1,11 +1,7 @@
 #pragma once
-#include <condition_variable>
 #include <cstdint>
-#include <mutex>
-#include <queue>
+#include <functional>
 #include <string>
-#include <thread>
-#include <utility>
 #include <vector>
 
 class OutputWriter;
@@ -26,27 +22,21 @@ public:
     WhisperWorker& operator=(const WhisperWorker&) = delete;
 
     // Optional: attach an OutputWriter before calling start().
-    // Thread-safe: acquires mutex_ so the worker thread sees a consistent pointer.
+    // Thread-safe: acquires internal mutex so the worker thread sees a
+    // consistent pointer.
     void setOutputWriter(OutputWriter* writer);
 
     // Optional: enable WAV saving. wav_dir must exist (or be created by caller).
-    void setSaveWav(bool enable, const std::string& wav_dir) {
-        save_wav_ = enable;
-        wav_dir_  = wav_dir;
-    }
+    void setSaveWav(bool enable, const std::string& wav_dir);
 
     // Optional: callback invoked after each *dictation* chunk is transcribed.
     // Receives the concatenated text of all non-empty segments.
     // Called on the worker thread — not the main thread.
-    void setOnResult(std::function<void(const std::string&)> cb) {
-        on_result_ = std::move(cb);
-    }
+    void setOnResult(std::function<void(const std::string&)> cb);
 
     // Optional: callback invoked when whisper_full fails or the queue overflows.
     // Receives a short error description. Called on the worker thread.
-    void setOnError(std::function<void(const std::string&)> cb) {
-        on_error_ = std::move(cb);
-    }
+    void setOnError(std::function<void(const std::string&)> cb);
 
     // Optional: callback invoked once when the queue empties after all pending
     // session chunks have been processed. Set this before forceFlush() so the
@@ -78,31 +68,6 @@ public:
 private:
     void workerLoop();
 
-    struct ChunkItem {
-        std::vector<float> samples;
-        int64_t            start_ms;     // wall-clock ms (Unix epoch) when chunk was captured
-        bool               is_dictation; // true → call on_result_, skip OutputWriter
-    };
-
-    std::string    model_path_;
-    bool           use_metal_;
-    std::string    language_;
-    bool           translate_;
-    OutputWriter*  output_writer_ = nullptr;
-    bool           save_wav_      = false;
-    std::string    wav_dir_;
-    int64_t        session_start_ms_ = 0;
-    int            wav_chunk_idx_    = 0;
-
-    std::function<void(const std::string&)> on_result_;
-    std::function<void(const std::string&)> on_error_;
-    std::function<void()>                   on_session_done_;
-
-    struct whisper_context* ctx_ = nullptr;
-
-    std::thread             thread_;
-    std::mutex              mutex_;
-    std::condition_variable cv_;
-    std::queue<ChunkItem>   queue_;
-    bool stop_flag_ = false;
+    struct Impl;
+    Impl* impl_;
 };
