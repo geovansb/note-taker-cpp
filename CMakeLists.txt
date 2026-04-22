@@ -100,3 +100,12 @@ add_executable(chunk_assembler_test
     src/vad.cpp
 )
 target_include_directories(chunk_assembler_test PRIVATE src)
+
+add_executable(whisper_worker_test
+    tests/whisper_worker_test.cpp
+    src/whisper_worker.cpp
+    src/output_writer.cpp
+    src/wav_writer.cpp
+)
+target_include_directories(whisper_worker_test PRIVATE src third_party whisper.cpp/include)
+target_link_libraries(whisper_worker_test PRIVATE whisper)
