@@ -6,16 +6,45 @@
 
 class OutputWriter;
 
-// Owns a whisper_context and a dedicated worker thread.
-// Accepts audio chunks via enqueue() and writes transcriptions to stdout
-// and, optionally, to an OutputWriter for persistent JSON/TXT output.
+// ── Transcription abstraction ─────────────────────────────────────────────────
+
+struct TranscribeSegment {
+    int64_t     t0;    // centiseconds from chunk start (whisper native unit)
+    int64_t     t1;
+    std::string text;
+};
+
+struct TranscribeResult {
+    bool                          ok = false;
+    std::vector<TranscribeSegment> segments;
+};
+
+// Signature for the transcription function injected into WhisperWorker.
+// (samples, n_samples, language, translate) → TranscribeResult
+using TranscribeFunc = std::function<TranscribeResult(
+    const float* samples, int n_samples,
+    const std::string& language, bool translate)>;
+
+// ── WhisperWorker ─────────────────────────────────────────────────────────────
+
+// Owns a dedicated worker thread that dequeues audio chunks and transcribes
+// them via an injected TranscribeFunc. Results go to stdout and, optionally,
+// to an OutputWriter for persistent JSON/TXT output.
 // Thread-safe: enqueue() may be called from any thread.
 class WhisperWorker {
 public:
+    // Production constructor — loads a whisper model in start().
     WhisperWorker(const std::string& model_path,
                   bool               use_metal,
                   const std::string& language,
                   bool               translate);
+
+    // Test constructor — uses a caller-provided transcribe function.
+    // start() skips model loading and just spawns the worker thread.
+    WhisperWorker(TranscribeFunc     transcribe,
+                  const std::string& language,
+                  bool               translate);
+
     ~WhisperWorker();
 
     WhisperWorker(const WhisperWorker&) = delete;
@@ -52,7 +81,8 @@ public:
     // always in English regardless of the spoken language.
     void setTranslate(bool translate);
 
-    // Load model and start worker thread. Returns false on model load failure.
+    // Load model (production) or just start worker thread (test).
+    // Returns false on model load failure (production only).
     bool start();
 
     // Enqueue a chunk for transcription. chunk_start_ms is the wall-clock time
