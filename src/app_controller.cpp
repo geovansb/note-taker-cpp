@@ -3,11 +3,11 @@
 #include "audio_capture.h"
 #include "chunk_assembler.h"
 #include "constants.h"
+#include "mode_machine.h"
 #include "output_writer.h"
 #include "vad.h"
 #include "whisper_worker.h"
 
-#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
@@ -15,14 +15,6 @@
 #include <mutex>
 #include <string>
 #include <vector>
-
-// ── Mode constants ────────────────────────────────────────────────────────────
-
-static constexpr int MODE_IDLE         = 0;
-static constexpr int MODE_DICTATING    = 1;
-static constexpr int MODE_TRANSCRIBING = 2; // dictation chunk in flight
-static constexpr int MODE_RECORDING    = 3;
-static constexpr int MODE_FINALIZING   = 4; // stop requested; draining worker queue
 
 // ── Impl ──────────────────────────────────────────────────────────────────────
 
@@ -33,8 +25,8 @@ struct AppController::Impl {
     std::string language;
     std::string output_dir;
 
-    // Mode state machine — atomic so the tap thread can read without a mutex
-    std::atomic<int> mode { MODE_IDLE };
+    // Mode state machine — thread-safe, emits AppStatus via callback
+    ModeMachine mode_machine;
 
     // Pipeline components
     AudioCapture                    capture;
@@ -77,6 +69,9 @@ AppController::AppController(const std::string& model_path,
     impl_->language   = language;
     impl_->output_dir = output_dir;
     impl_->owner      = this;
+    impl_->mode_machine.setStatusCallback([this](AppStatus s) {
+        impl_->notifyStatus(s);
+    });
 }
 
 AppController::~AppController() {
@@ -115,7 +110,7 @@ void AppController::setSilenceTimeout(float seconds) {
 }
 
 bool AppController::isRecording() const {
-    return impl_->mode.load(std::memory_order_relaxed) == MODE_RECORDING;
+    return impl_->mode_machine.isRecording();
 }
 
 bool AppController::start() {
@@ -138,8 +133,7 @@ bool AppController::start() {
         if (!text.empty() && impl_->on_dictation_result) {
             impl_->on_dictation_result(text);
         }
-        impl_->mode.store(MODE_IDLE);
-        impl_->notifyStatus(AppStatus::Idle);
+        impl_->mode_machine.transcriptionDone();
     });
 
     if (!impl_->worker->start()) {
@@ -158,7 +152,7 @@ bool AppController::start() {
         }
     );
     impl_->assembler->setOnStateChange([this](bool capturing) {
-        if (impl_->mode.load(std::memory_order_relaxed) == MODE_RECORDING) {
+        if (impl_->mode_machine.isRecording()) {
             impl_->notifyStatus(capturing ? AppStatus::RecordingCapturing
                                           : AppStatus::RecordingListening);
         }
@@ -171,14 +165,14 @@ bool AppController::start() {
         impl_->notifyStatus(AppStatus::ErrorAudioDeviceChanged);
     });
     bool mic_ok = impl_->capture.start([this](const float* s, size_t n) {
-        int mode = impl_->mode.load(std::memory_order_relaxed);
-        if (mode == MODE_DICTATING) {
+        Mode m = impl_->mode_machine.mode();
+        if (m == Mode::Dictating) {
             std::lock_guard<std::mutex> lock(impl_->dict_mutex);
             impl_->dict_buffer.insert(impl_->dict_buffer.end(), s, s + n);
-        } else if (mode == MODE_RECORDING) {
+        } else if (m == Mode::Recording) {
             impl_->assembler->feed(s, n);
         }
-        // IDLE and TRANSCRIBING: discard samples
+        // Idle and Transcribing: discard samples
     });
 
     if (!mic_ok) {
@@ -205,7 +199,7 @@ void AppController::stop() {
     }
 
     impl_->worker->stop(); // drains queue, then joins
-    impl_->mode.store(MODE_IDLE);
+    impl_->mode_machine.reset();
 }
 
 // ── Hotkey state machine ──────────────────────────────────────────────────────
@@ -216,26 +210,21 @@ void AppController::onHotkeyDown() {
     // and the dictation attempt fails silently.
     if (!impl_->started) return;
 
-    // Acquire dict_mutex before CAS so buffer clear is atomic with mode change.
-    // Prevents tap thread from appending to the old buffer between CAS and clear.
+    // Acquire dict_mutex before tryDictate so buffer clear is atomic with
+    // mode change. Prevents tap thread from appending to the old buffer
+    // between mode change and clear.
     std::lock_guard<std::mutex> lock(impl_->dict_mutex);
 
-    int expected = MODE_IDLE;
-    if (!impl_->mode.compare_exchange_strong(expected, MODE_DICTATING)) {
-        // Beep so the user knows the hotkey was ignored (e.g. during recording).
-        impl_->notifyStatus(AppStatus::Beep);
-        return;
-    }
+    if (!impl_->mode_machine.tryDictate()) return; // emits Beep on rejection
 
     impl_->dict_buffer.clear();
     impl_->dict_buffer.reserve(30 * CAPTURE_SAMPLE_RATE); // 30s max dictation
-    impl_->notifyStatus(AppStatus::Dictating);
+    // Dictating status emitted by ModeMachine
 }
 
 void AppController::onHotkeyUp() {
-    int expected = MODE_DICTATING;
-    if (!impl_->mode.compare_exchange_strong(expected, MODE_TRANSCRIBING))
-        return; // only if we were DICTATING
+    if (!impl_->mode_machine.finishDictation())
+        return; // only if we were DICTATING; emits Transcribing
 
     std::vector<float> audio;
     {
@@ -245,12 +234,9 @@ void AppController::onHotkeyUp() {
 
     // Require at least 0.5 s to avoid accidental taps
     if (audio.size() < static_cast<size_t>(CAPTURE_SAMPLE_RATE / 2)) {
-        impl_->mode.store(MODE_IDLE);
-        impl_->notifyStatus(AppStatus::Idle);
+        impl_->mode_machine.transcriptionDone(); // back to Idle
         return;
     }
-
-    impl_->notifyStatus(AppStatus::Transcribing);
 
     int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -277,23 +263,18 @@ void AppController::startSession() {
     });
     impl_->worker->setOutputWriter(impl_->session_writer);
 
-    int expected = MODE_IDLE;
-    if (!impl_->mode.compare_exchange_strong(expected, MODE_RECORDING)) {
+    if (!impl_->mode_machine.tryRecord()) {
         // Another mode was active — roll back.
         impl_->worker->setOutputWriter(nullptr);
         impl_->session_writer.reset();
         return;
     }
-
-    impl_->notifyStatus(AppStatus::RecordingListening);
+    // RecordingListening status emitted by ModeMachine
 }
 
 void AppController::stopSession() {
-    int expected = MODE_RECORDING;
-    if (!impl_->mode.compare_exchange_strong(expected, MODE_FINALIZING))
-        return;
-
-    impl_->notifyStatus(AppStatus::Finalizing);
+    if (!impl_->mode_machine.stopRecord())
+        return; // Finalizing status emitted by ModeMachine
 
     // Register cleanup to run once the worker drains all queued session chunks.
     // The callback fires on the worker thread; dispatch UI updates to main queue
@@ -305,8 +286,7 @@ void AppController::stopSession() {
             impl_->session_writer->flush();
             impl_->session_writer.reset();
         }
-        impl_->mode.store(MODE_IDLE);
-        impl_->notifyStatus(AppStatus::Idle);
+        impl_->mode_machine.finalizeDone(); // back to Idle
     });
 
     // Flush any partial buffer still in the assembler (audio since last VAD flush).
