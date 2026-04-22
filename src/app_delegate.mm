@@ -17,6 +17,7 @@ static NSString* const kOutputDirKey   = @"output_dir";
     NSStatusItem*  _statusItem;
     AppController* _controller;   // owned; stopped and deleted in applicationWillTerminate:
     EventTap       _eventTap;     // owned; lives on main thread, forwards to controller
+    NSTimer*       _accessibilityRetryTimer;
     std::string    _outputDir;
     NSString*      _language;
     NSString*      _model;        // selected for next restart
@@ -74,6 +75,10 @@ static NSString* const kOutputDirKey   = @"output_dir";
 }
 
 - (void)applicationWillTerminate:(NSNotification*)__unused note {
+    if (_accessibilityRetryTimer) {
+        [_accessibilityRetryTimer invalidate];
+        _accessibilityRetryTimer = nil;
+    }
     _eventTap.stop();
     if (_controller) {
         _controller->stop();
@@ -99,7 +104,7 @@ static NSString* const kOutputDirKey   = @"output_dir";
     alert.informativeText = @"The dictation hotkey (Right Option) requires Accessibility access.\n\n"
                             @"1. Go to Privacy & Security → Accessibility\n"
                             @"2. Enable note-taker-bar\n"
-                            @"3. Restart the app\n\n"
+                            @"3. Return to the app\n\n"
                             @"Recording sessions still work without this permission.";
     alert.alertStyle = NSAlertStyleWarning;
     [alert addButtonWithTitle:@"Open System Settings"];
@@ -136,6 +141,49 @@ static NSString* const kOutputDirKey   = @"output_dir";
     alert.alertStyle = NSAlertStyleWarning;
     [alert addButtonWithTitle:@"OK"];
     [alert runModal];
+}
+
+- (BOOL)attemptStartEventTapWithPrompt:(BOOL)prompt {
+    __weak AppDelegate* weakSelf = self;
+    _eventTap.setHotkey(_hotkeyCode);
+    bool tap_ok = _eventTap.start(
+        [weakSelf] {
+            AppDelegate* d = weakSelf;
+            if (d && d->_controller) d->_controller->onHotkeyDown();
+        },
+        [weakSelf] {
+            AppDelegate* d = weakSelf;
+            if (d && d->_controller) d->_controller->onHotkeyUp();
+        },
+        prompt
+    );
+
+    if (tap_ok && _accessibilityRetryTimer) {
+        [_accessibilityRetryTimer invalidate];
+        _accessibilityRetryTimer = nil;
+        NSLog(@"[note-taker] EventTap started");
+    }
+    return tap_ok;
+}
+
+- (void)scheduleAccessibilityRetry {
+    if (_accessibilityRetryTimer) return;
+
+    __weak AppDelegate* weakSelf = self;
+    _accessibilityRetryTimer =
+        [NSTimer scheduledTimerWithTimeInterval:1.0
+                                        repeats:YES
+                                          block:^(NSTimer* timer) {
+            AppDelegate* d = weakSelf;
+            if (!d) {
+                [timer invalidate];
+                return;
+            }
+            if ([d attemptStartEventTapWithPrompt:NO]) {
+                [timer invalidate];
+                d->_accessibilityRetryTimer = nil;
+            }
+        }];
 }
 
 // ── Controller setup ──────────────────────────────────────────────────────────
@@ -202,22 +250,14 @@ static NSString* const kOutputDirKey   = @"output_dir";
         });
     });
 
-    // EventTap must start on the main thread so AXIsProcessTrustedWithOptions
-    // can show the system Accessibility dialog (UI operations require main thread).
-    _eventTap.setHotkey(_hotkeyCode);
-    bool tap_ok = _eventTap.start(
-        [weakSelf] {
-            AppDelegate* d = weakSelf;
-            if (d && d->_controller) d->_controller->onHotkeyDown();
-        },
-        [weakSelf] {
-            AppDelegate* d = weakSelf;
-            if (d && d->_controller) d->_controller->onHotkeyUp();
-        }
-    );
-    if (!tap_ok) {
+    // Start the EventTap silently on launch. If Accessibility is still denied,
+    // show our own instructions instead of auto-triggering the system prompt on
+    // every app start. A retry timer will start the tap as soon as permission
+    // is granted, without requiring a relaunch.
+    if (![self attemptStartEventTapWithPrompt:NO]) {
         NSLog(@"[note-taker] EventTap not started — Accessibility not granted");
         [self showAccessibilityDeniedAlert];
+        [self scheduleAccessibilityRetry];
     }
 
     // Load model off the main thread (whisper_init_from_file blocks ~3-5 s).

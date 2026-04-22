@@ -9,6 +9,8 @@ struct AudioCapture::Impl {
     AVAudioConverter* converter = nil;
     AVAudioPCMBuffer* outBuf   = nil;  // reused across tap callbacks
     id                configObserver = nil;
+    bool              permission_checked = false;
+    bool              permission_granted = false;
     std::function<void()> on_config_change;
     std::function<void()> on_recovery_failed;
     std::function<void(const float*, size_t)> on_block; // kept for tap reinstall
@@ -102,17 +104,25 @@ AudioCapture::~AudioCapture() {
 }
 
 bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
-    // Request microphone permission synchronously.
-    __block bool granted = false;
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio
-                             completionHandler:^(BOOL g) {
-        granted = g;
-        dispatch_semaphore_signal(sem);
-    }];
-    dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+    // Request microphone permission once per process. The result is cached so
+    // subsequent start() calls skip the semaphore wait entirely. This avoids a
+    // potential deadlock: requestAccessForMediaType: may dispatch its completion
+    // handler to the main queue when the result is already cached, and if the
+    // caller is also on the main queue, dispatch_semaphore_wait blocks it.
+    if (!impl_->permission_checked) {
+        __block bool granted = false;
+        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+        [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio
+                                 completionHandler:^(BOOL g) {
+            granted = g;
+            dispatch_semaphore_signal(sem);
+        }];
+        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+        impl_->permission_checked = true;
+        impl_->permission_granted = granted;
+    }
 
-    if (!granted) {
+    if (!impl_->permission_granted) {
         fprintf(stderr, "error: microphone permission denied — "
                         "enable in System Settings > Privacy > Microphone\n");
         return false;

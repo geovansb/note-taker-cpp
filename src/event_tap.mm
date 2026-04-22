@@ -83,16 +83,21 @@ void EventTap::setHotkey(int keycode) {
     impl_->hotkey.store(keycode, std::memory_order_relaxed);
 }
 
-bool EventTap::start(std::function<void()> on_down, std::function<void()> on_up) {
+bool EventTap::isTrusted(bool prompt) const {
+    if (!prompt) return AXIsProcessTrusted();
+
+    NSDictionary* opts = @{ (__bridge id)kAXTrustedCheckOptionPrompt: @YES };
+    return AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)opts);
+}
+
+bool EventTap::start(std::function<void()> on_down, std::function<void()> on_up,
+                     bool prompt) {
     if (impl_->running) return true;
 
-    // Pass kAXTrustedCheckOptionPrompt=YES so macOS shows the Accessibility
-    // dialog automatically when the CDHash changes after a rebuild.
-    NSDictionary* opts = @{ (__bridge id)kAXTrustedCheckOptionPrompt: @YES };
-    bool trusted = AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)opts);
+    bool trusted = isTrusted(prompt);
     NSLog(@"[event_tap] AXIsProcessTrusted = %@", trusted ? @"YES" : @"NO");
     if (!trusted) {
-        NSLog(@"[event_tap] Accessibility not granted — grant in System Settings and relaunch");
+        NSLog(@"[event_tap] Accessibility not granted — grant in System Settings");
         return false;
     }
 

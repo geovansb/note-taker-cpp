@@ -18,9 +18,14 @@ public:
     // Must be called before start().
     void setHotkey(int keycode);
 
+    // Returns whether Accessibility trust is currently granted. When prompt is
+    // true, asks macOS to show the system permission prompt if needed.
+    bool isTrusted(bool prompt = false) const;
+
     // Start monitoring. on_down/on_up are called on the internal CFRunLoop thread.
     // Returns false and prints a warning to stderr if Accessibility is not granted.
-    bool start(std::function<void()> on_down, std::function<void()> on_up);
+    bool start(std::function<void()> on_down, std::function<void()> on_up,
+               bool prompt = false);
 
     void stop();
 
