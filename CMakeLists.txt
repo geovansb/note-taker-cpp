@@ -36,6 +36,7 @@ add_executable(note-taker-bar MACOSX_BUNDLE
     src/whisper_worker.cpp
     src/output_writer.cpp
     src/wav_writer.cpp
+    src/mode_machine.cpp
 )
 set_target_properties(note-taker-bar PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/bar/Info.plist"
@@ -121,3 +122,9 @@ add_executable(whisper_worker_test
 )
 target_include_directories(whisper_worker_test PRIVATE src third_party whisper.cpp/include)
 target_link_libraries(whisper_worker_test PRIVATE whisper)
+
+add_executable(mode_machine_test
+    tests/mode_machine_test.cpp
+    src/mode_machine.cpp
+)
+target_include_directories(mode_machine_test PRIVATE src)
