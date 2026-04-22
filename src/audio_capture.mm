@@ -23,6 +23,13 @@ struct AudioCapture::Impl {
         fprintf(stderr, "info: hardware format %.0f Hz, %u ch\n",
                 hwFormat.sampleRate, (unsigned)hwFormat.channelCount);
 
+        // Reject invalid formats that appear transiently during device changes
+        // (e.g. Bluetooth disconnect → 0 Hz / 0 channels).
+        if (hwFormat.sampleRate < 1.0 || hwFormat.channelCount == 0) {
+            fprintf(stderr, "warn: invalid hardware format — device not ready\n");
+            return false;
+        }
+
         AVAudioFormat* targetFormat = [[AVAudioFormat alloc]
             initWithCommonFormat:AVAudioPCMFormatFloat32
                       sampleRate:CAPTURE_SAMPLE_RATE
@@ -46,33 +53,43 @@ struct AudioCapture::Impl {
         AVAudioConverter* conv = converter;
         AVAudioPCMBuffer* reusableBuf = outBuf;
         auto callback = on_block;
-        [inputNode installTapOnBus:0
-                        bufferSize:4096
-                            format:hwFormat
-                             block:^(AVAudioPCMBuffer* inBuf, AVAudioTime*) {
-            @autoreleasepool {
-                reusableBuf.frameLength = 0;
 
-                __block BOOL consumed = NO;
-                NSError* convErr = nil;
-                [conv convertToBuffer:reusableBuf
-                                error:&convErr
-                  withInputFromBlock:^AVAudioBuffer*(AVAudioPacketCount,
-                                                     AVAudioConverterInputStatus* status) {
-                    if (consumed) {
-                        *status = AVAudioConverterInputStatus_NoDataNow;
-                        return nil;
+        // installTapOnBus: throws NSException on invalid state (format mismatch,
+        // device gone, tap already installed). Catch to return false instead of
+        // crashing — the retry loop in the config-change handler will try again.
+        @try {
+            [inputNode installTapOnBus:0
+                            bufferSize:4096
+                                format:hwFormat
+                                 block:^(AVAudioPCMBuffer* inBuf, AVAudioTime*) {
+                @autoreleasepool {
+                    reusableBuf.frameLength = 0;
+
+                    __block BOOL consumed = NO;
+                    NSError* convErr = nil;
+                    [conv convertToBuffer:reusableBuf
+                                    error:&convErr
+                      withInputFromBlock:^AVAudioBuffer*(AVAudioPacketCount,
+                                                         AVAudioConverterInputStatus* status) {
+                        if (consumed) {
+                            *status = AVAudioConverterInputStatus_NoDataNow;
+                            return nil;
+                        }
+                        consumed = YES;
+                        *status = AVAudioConverterInputStatus_HaveData;
+                        return inBuf;
+                    }];
+
+                    if (!convErr && reusableBuf.frameLength > 0) {
+                        callback(reusableBuf.floatChannelData[0], reusableBuf.frameLength);
                     }
-                    consumed = YES;
-                    *status = AVAudioConverterInputStatus_HaveData;
-                    return inBuf;
-                }];
-
-                if (!convErr && reusableBuf.frameLength > 0) {
-                    callback(reusableBuf.floatChannelData[0], reusableBuf.frameLength);
                 }
-            }
-        }];
+            }];
+        } @catch (NSException* ex) {
+            fprintf(stderr, "warn: installTapOnBus threw: %s — %s\n",
+                    ex.name.UTF8String, ex.reason.UTF8String);
+            return false;
+        }
         return true;
     }
 };
