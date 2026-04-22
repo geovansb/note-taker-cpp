@@ -31,7 +31,7 @@ struct WhisperWorker::Impl {
     TranscribeFunc transcribe;
 
     // Runtime state
-    OutputWriter*  output_writer = nullptr;
+    std::shared_ptr<OutputWriter> output_writer;
     bool           save_wav      = false;
     std::string    wav_dir;
     int64_t        session_start_ms = 0;
@@ -115,9 +115,9 @@ void WhisperWorker::setTranslate(bool translate) {
     impl_->translate = translate;
 }
 
-void WhisperWorker::setOutputWriter(OutputWriter* writer) {
+void WhisperWorker::setOutputWriter(std::shared_ptr<OutputWriter> writer) {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    impl_->output_writer = writer;
+    impl_->output_writer = std::move(writer);
 }
 
 // ── start / stop ──────────────────────────────────────────────────────────────
@@ -214,7 +214,7 @@ void WhisperWorker::workerLoop() {
         Impl::ChunkItem item;
         std::string lang;
         bool           do_translate = false;
-        OutputWriter*  ow           = nullptr;
+        std::shared_ptr<OutputWriter> ow;
         {
             std::unique_lock<std::mutex> lock(impl_->mutex);
             impl_->cv.wait(lock, [this] {

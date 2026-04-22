@@ -41,7 +41,7 @@ struct AppController::Impl {
     Vad                             vad;
     std::unique_ptr<ChunkAssembler> assembler;
     std::unique_ptr<WhisperWorker>  worker;
-    std::unique_ptr<OutputWriter>   session_writer;
+    std::shared_ptr<OutputWriter>   session_writer;
 
     // Dictation audio accumulator (written on tap thread, read on hotkey-up)
     std::vector<float> dict_buffer;
@@ -211,6 +211,11 @@ void AppController::stop() {
 // ── Hotkey state machine ──────────────────────────────────────────────────────
 
 void AppController::onHotkeyDown() {
+    // Reject if the controller hasn't fully started yet (model still loading,
+    // audio capture not running). Without this guard the buffer stays empty
+    // and the dictation attempt fails silently.
+    if (!impl_->started) return;
+
     // Acquire dict_mutex before CAS so buffer clear is atomic with mode change.
     // Prevents tap thread from appending to the old buffer between CAS and clear.
     std::lock_guard<std::mutex> lock(impl_->dict_mutex);
@@ -264,13 +269,13 @@ void AppController::startSession() {
     char session_id[32];
     std::strftime(session_id, sizeof(session_id), "%Y%m%d_%H%M%S", &tm_info);
 
-    impl_->session_writer = std::make_unique<OutputWriter>(
+    impl_->session_writer = std::make_shared<OutputWriter>(
         impl_->output_dir, session_id, impl_->model_path, impl_->language
     );
     impl_->session_writer->setOnError([this](const std::string& msg) {
         impl_->notifyStatus(AppStatus::ErrorGeneric, msg);
     });
-    impl_->worker->setOutputWriter(impl_->session_writer.get());
+    impl_->worker->setOutputWriter(impl_->session_writer);
 
     int expected = MODE_IDLE;
     if (!impl_->mode.compare_exchange_strong(expected, MODE_RECORDING)) {

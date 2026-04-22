@@ -15,6 +15,7 @@ struct EventTapImpl {
     CFMachPortRef            tap      = nullptr;
     CFRunLoopSourceRef       src      = nullptr;
     CFRunLoopRef             run_loop = nullptr;
+    CFRunLoopTimerRef        health_timer = nullptr;
     std::thread              thread;
     std::atomic<bool>        running  { false };
     std::mutex               ready_mutex;
@@ -32,6 +33,8 @@ static CGEventRef event_tap_callback(CGEventTapProxy __unused proxy,
     // Re-enable the tap if the system disabled it (e.g. after a timeout).
     if (type == kCGEventTapDisabledByTimeout ||
         type == kCGEventTapDisabledByUserInput) {
+        NSLog(@"[event_tap] tap disabled by %s — re-enabling",
+              type == kCGEventTapDisabledByTimeout ? "timeout" : "user input");
         if (impl->tap) CGEventTapEnable(impl->tap, true);
         return event;
     }
@@ -122,6 +125,27 @@ bool EventTap::start(std::function<void()> on_down, std::function<void()> on_up)
         impl_->run_loop = CFRunLoopGetCurrent();
         CFRunLoopAddSource(impl_->run_loop, impl_->src, kCFRunLoopCommonModes);
         CGEventTapEnable(impl_->tap, true);
+
+        // Periodic health check: re-enable the tap if macOS silently disabled it.
+        // This handles cases where the disabled notification event is not delivered
+        // (e.g. after sleep/wake, Accessibility permission changes, system updates).
+        CFRunLoopTimerContext timer_ctx = { 0, impl_, nullptr, nullptr, nullptr };
+        impl_->health_timer = CFRunLoopTimerCreate(
+            kCFAllocatorDefault,
+            CFAbsoluteTimeGetCurrent() + 5.0,  // first fire after 5s
+            5.0,                                 // repeat every 5s
+            0, 0,
+            [](CFRunLoopTimerRef, void* info) {
+                EventTapImpl* impl = static_cast<EventTapImpl*>(info);
+                if (impl->tap && !CGEventTapIsEnabled(impl->tap)) {
+                    NSLog(@"[event_tap] health check: tap was disabled — re-enabling");
+                    CGEventTapEnable(impl->tap, true);
+                }
+            },
+            &timer_ctx
+        );
+        CFRunLoopAddTimer(impl_->run_loop, impl_->health_timer, kCFRunLoopCommonModes);
+
         // Signal that the run loop is about to start — start() can return safely.
         {
             std::lock_guard<std::mutex> lock(impl_->ready_mutex);
@@ -131,6 +155,11 @@ bool EventTap::start(std::function<void()> on_down, std::function<void()> on_up)
         CFRunLoopRun();   // blocks until CFRunLoopStop()
         CGEventTapEnable(impl_->tap, false);
         CFRunLoopRemoveSource(impl_->run_loop, impl_->src, kCFRunLoopCommonModes);
+        if (impl_->health_timer) {
+            CFRunLoopRemoveTimer(impl_->run_loop, impl_->health_timer, kCFRunLoopCommonModes);
+            CFRelease(impl_->health_timer);
+            impl_->health_timer = nullptr;
+        }
     });
 
     // Wait until the run loop thread is ready before returning, so no events

@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -53,7 +54,7 @@ public:
     // Optional: attach an OutputWriter before calling start().
     // Thread-safe: acquires internal mutex so the worker thread sees a
     // consistent pointer.
-    void setOutputWriter(OutputWriter* writer);
+    void setOutputWriter(std::shared_ptr<OutputWriter> writer);
 
     // Optional: enable WAV saving. wav_dir must exist (or be created by caller).
     void setSaveWav(bool enable, const std::string& wav_dir);
