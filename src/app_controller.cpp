@@ -54,6 +54,24 @@ struct AppController::Impl {
     void notifyStatus(AppStatus s, const std::string& detail) {
         if (on_status) on_status(AppStatusEvent(s, detail));
     }
+
+    // Start/stop microphone on demand. Avoids keeping the mic always active,
+    // which forces Bluetooth headphones into low-quality HFP telephony mode.
+    bool startMic() {
+        return capture.start([this](const float* s, size_t n) {
+            Mode m = mode_machine.mode();
+            if (m == Mode::Dictating) {
+                std::lock_guard<std::mutex> lock(dict_mutex);
+                dict_buffer.insert(dict_buffer.end(), s, s + n);
+            } else if (m == Mode::Recording) {
+                assembler->feed(s, n);
+            }
+        });
+    }
+
+    void stopMic() {
+        capture.stop();
+    }
 };
 
 // ── AppController ─────────────────────────────────────────────────────────────
@@ -159,8 +177,10 @@ bool AppController::start() {
     });
 
     // ── AudioCapture ──────────────────────────────────────────────────────────
-    // Started once and never stopped — eliminates the ~300ms AVAudioEngine
-    // restart latency that would otherwise occur on every dictation keypress.
+    // Mic is started on-demand (dictation keypress / recording session start)
+    // and stopped when done. This avoids keeping the mic always active, which
+    // forces Bluetooth headphones into low-quality HFP telephony mode and
+    // shows the orange mic indicator permanently.
     impl_->capture.setOnConfigChange([this] {
         impl_->notifyStatus(AppStatus::ErrorAudioDeviceChanged);
     });
@@ -168,21 +188,6 @@ bool AppController::start() {
         impl_->notifyStatus(AppStatus::ErrorGeneric,
                             "Audio recovery failed — restart required");
     });
-    bool mic_ok = impl_->capture.start([this](const float* s, size_t n) {
-        Mode m = impl_->mode_machine.mode();
-        if (m == Mode::Dictating) {
-            std::lock_guard<std::mutex> lock(impl_->dict_mutex);
-            impl_->dict_buffer.insert(impl_->dict_buffer.end(), s, s + n);
-        } else if (m == Mode::Recording) {
-            impl_->assembler->feed(s, n);
-        }
-        // Idle and Transcribing: discard samples
-    });
-
-    if (!mic_ok) {
-        impl_->notifyStatus(AppStatus::ErrorMicDenied);
-        return false;
-    }
 
     impl_->started = true;
     impl_->notifyStatus(AppStatus::Idle);
@@ -209,26 +214,31 @@ void AppController::stop() {
 // ── Hotkey state machine ──────────────────────────────────────────────────────
 
 void AppController::onHotkeyDown() {
-    // Reject if the controller hasn't fully started yet (model still loading,
-    // audio capture not running). Without this guard the buffer stays empty
-    // and the dictation attempt fails silently.
+    // Reject if the controller hasn't fully started yet (model still loading).
     if (!impl_->started) return;
 
-    // Acquire dict_mutex before tryDictate so buffer clear is atomic with
-    // mode change. Prevents tap thread from appending to the old buffer
-    // between mode change and clear.
-    std::lock_guard<std::mutex> lock(impl_->dict_mutex);
+    {
+        std::lock_guard<std::mutex> lock(impl_->dict_mutex);
+        if (!impl_->mode_machine.tryDictate()) return; // emits Beep on rejection
+        impl_->dict_buffer.clear();
+        impl_->dict_buffer.reserve(30 * CAPTURE_SAMPLE_RATE); // 30s max dictation
+    }
 
-    if (!impl_->mode_machine.tryDictate()) return; // emits Beep on rejection
-
-    impl_->dict_buffer.clear();
-    impl_->dict_buffer.reserve(30 * CAPTURE_SAMPLE_RATE); // 30s max dictation
-    // Dictating status emitted by ModeMachine
+    // Start mic after setting mode — no audio thread is running yet,
+    // so the buffer clear above doesn't need synchronisation with the tap.
+    if (!impl_->startMic()) {
+        impl_->mode_machine.cancelDictation(); // back to Idle
+        impl_->notifyStatus(AppStatus::ErrorMicDenied);
+        return;
+    }
 }
 
 void AppController::onHotkeyUp() {
     if (!impl_->mode_machine.finishDictation())
         return; // only if we were DICTATING; emits Transcribing
+
+    // Stop mic immediately — we have all the audio we need.
+    impl_->stopMic();
 
     std::vector<float> audio;
     {
@@ -273,6 +283,14 @@ void AppController::startSession() {
         impl_->session_writer.reset();
         return;
     }
+
+    if (!impl_->startMic()) {
+        impl_->mode_machine.reset(); // back to Idle
+        impl_->worker->setOutputWriter(nullptr);
+        impl_->session_writer.reset();
+        impl_->notifyStatus(AppStatus::ErrorMicDenied);
+        return;
+    }
     // RecordingListening status emitted by ModeMachine
 }
 
@@ -296,7 +314,7 @@ void AppController::stopSession() {
     // Flush any partial buffer still in the assembler (audio since last VAD flush).
     // This enqueues one more chunk to the worker before the queue drains.
     impl_->assembler->forceFlush();
-    // setOnSessionDone() already notified the worker's cv; if the queue was
-    // already empty (nothing was flushed, nothing was pending) the callback
-    // fires immediately on the next worker loop iteration.
+
+    // Release mic now — all audio has been captured and flushed.
+    impl_->stopMic();
 }

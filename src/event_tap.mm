@@ -178,9 +178,12 @@ void EventTap::stop() {
 
     if (impl_->run_loop) {
         CFRunLoopStop(impl_->run_loop);
-        impl_->run_loop = nullptr;
+        // Do NOT null run_loop here — the thread still needs it for cleanup
+        // (CFRunLoopRemoveSource / CFRunLoopRemoveTimer) after CFRunLoopRun()
+        // returns. Nulling before join() is a use-after-free race.
     }
     if (impl_->thread.joinable()) impl_->thread.join();
+    impl_->run_loop = nullptr;
 
     if (impl_->src)  { CFRelease(impl_->src);  impl_->src  = nullptr; }
     if (impl_->tap)  { CFRelease(impl_->tap);  impl_->tap  = nullptr; }

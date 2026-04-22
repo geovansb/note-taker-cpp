@@ -82,7 +82,7 @@ static void test_dictate_rejected_during_recording() {
 static void test_dictate_rejected_during_transcribing() {
     auto m = makeMachine();
     assert(m->tryDictate());
-    assert(m.finishDictation());
+    assert(m->finishDictation());
     statuses.clear();
 
     assert(!m->tryDictate());
@@ -174,7 +174,7 @@ static void test_reset_from_any_state() {
     assert(m->mode() == Mode::Idle);
 
     assert(m->tryDictate());
-    assert(m.finishDictation());
+    assert(m->finishDictation());
     m->reset();
     assert(m->mode() == Mode::Idle);
 
@@ -188,7 +188,7 @@ static void test_isDictating() {
     assert(m->tryDictate());
     assert(m->isDictating());
 
-    assert(m.finishDictation());
+    assert(m->finishDictation());
     assert(!m->isDictating());
 
     printf("test_isDictating: OK\n");
