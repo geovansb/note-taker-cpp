@@ -101,6 +101,12 @@ add_executable(chunk_assembler_test
 )
 target_include_directories(chunk_assembler_test PRIVATE src)
 
+add_executable(output_writer_test
+    tests/output_writer_test.cpp
+    src/output_writer.cpp
+)
+target_include_directories(output_writer_test PRIVATE src third_party)
+
 add_executable(whisper_worker_test
     tests/whisper_worker_test.cpp
     src/whisper_worker.cpp
