@@ -101,6 +101,12 @@ add_executable(chunk_assembler_test
 )
 target_include_directories(chunk_assembler_test PRIVATE src)
 
+add_executable(wav_writer_test
+    tests/wav_writer_test.cpp
+    src/wav_writer.cpp
+)
+target_include_directories(wav_writer_test PRIVATE src)
+
 add_executable(output_writer_test
     tests/output_writer_test.cpp
     src/output_writer.cpp
