@@ -1,4 +1,5 @@
 #include "app_controller.h"
+#include "app_status.h"
 #include "audio_capture.h"
 #include "chunk_assembler.h"
 #include "constants.h"
@@ -47,7 +48,7 @@ struct AppController::Impl {
     std::mutex         dict_mutex;
 
     // User-facing callbacks (set before start())
-    std::function<void(std::string)> on_status;
+    std::function<void(AppStatusEvent)> on_status;
     std::function<void(std::string)> on_dictation_result;
 
     // Back-pointer — valid for the lifetime of AppController
@@ -55,8 +56,11 @@ struct AppController::Impl {
 
     bool started = false;
 
-    void notifyStatus(const std::string& s) {
-        if (on_status) on_status(s);
+    void notifyStatus(AppStatus s) {
+        if (on_status) on_status(AppStatusEvent(s));
+    }
+    void notifyStatus(AppStatus s, const std::string& detail) {
+        if (on_status) on_status(AppStatusEvent(s, detail));
     }
 };
 
@@ -80,7 +84,7 @@ AppController::~AppController() {
     delete impl_;
 }
 
-void AppController::setOnStatusChange(std::function<void(std::string)> cb) {
+void AppController::setOnStatusChange(std::function<void(AppStatusEvent)> cb) {
     impl_->on_status = std::move(cb);
 }
 
@@ -117,7 +121,7 @@ bool AppController::isRecording() const {
 bool AppController::start() {
     if (impl_->started) return true;
 
-    impl_->notifyStatus("⏳ Loading model…");
+    impl_->notifyStatus(AppStatus::LoadingModel);
 
     // ── WhisperWorker ─────────────────────────────────────────────────────────
     impl_->worker = std::make_unique<WhisperWorker>(
@@ -126,7 +130,7 @@ bool AppController::start() {
 
     // Surface transcription errors to the user via the status callback.
     impl_->worker->setOnError([this](const std::string& msg) {
-        impl_->notifyStatus("⚠ " + msg);
+        impl_->notifyStatus(AppStatus::ErrorTranscription, msg);
     });
 
     // on_result fires (on worker thread) after every dictation chunk.
@@ -135,12 +139,12 @@ bool AppController::start() {
             impl_->on_dictation_result(text);
         }
         impl_->mode.store(MODE_IDLE);
-        impl_->notifyStatus("● Idle");
+        impl_->notifyStatus(AppStatus::Idle);
     });
 
     if (!impl_->worker->start()) {
         impl_->worker.reset(); // prevent enqueue() on a null whisper context
-        impl_->notifyStatus("⚠ Model not found");
+        impl_->notifyStatus(AppStatus::ErrorModelNotFound);
         return false;
     }
 
@@ -155,7 +159,8 @@ bool AppController::start() {
     );
     impl_->assembler->setOnStateChange([this](bool capturing) {
         if (impl_->mode.load(std::memory_order_relaxed) == MODE_RECORDING) {
-            impl_->notifyStatus(capturing ? "🔴 Capturing…" : "🔴 Listening…");
+            impl_->notifyStatus(capturing ? AppStatus::RecordingCapturing
+                                          : AppStatus::RecordingListening);
         }
     });
 
@@ -163,7 +168,7 @@ bool AppController::start() {
     // Started once and never stopped — eliminates the ~300ms AVAudioEngine
     // restart latency that would otherwise occur on every dictation keypress.
     impl_->capture.setOnConfigChange([this] {
-        impl_->notifyStatus("⚠ Audio device changed");
+        impl_->notifyStatus(AppStatus::ErrorAudioDeviceChanged);
     });
     bool mic_ok = impl_->capture.start([this](const float* s, size_t n) {
         int mode = impl_->mode.load(std::memory_order_relaxed);
@@ -177,12 +182,12 @@ bool AppController::start() {
     });
 
     if (!mic_ok) {
-        impl_->notifyStatus("⚠ Mic denied");
+        impl_->notifyStatus(AppStatus::ErrorMicDenied);
         return false;
     }
 
     impl_->started = true;
-    impl_->notifyStatus("● Idle");
+    impl_->notifyStatus(AppStatus::Idle);
     return true;
 }
 
@@ -213,13 +218,13 @@ void AppController::onHotkeyDown() {
     int expected = MODE_IDLE;
     if (!impl_->mode.compare_exchange_strong(expected, MODE_DICTATING)) {
         // Beep so the user knows the hotkey was ignored (e.g. during recording).
-        impl_->notifyStatus("⚠ beep");
+        impl_->notifyStatus(AppStatus::Beep);
         return;
     }
 
     impl_->dict_buffer.clear();
     impl_->dict_buffer.reserve(30 * CAPTURE_SAMPLE_RATE); // 30s max dictation
-    impl_->notifyStatus("⏺ Dictating…");
+    impl_->notifyStatus(AppStatus::Dictating);
 }
 
 void AppController::onHotkeyUp() {
@@ -236,11 +241,11 @@ void AppController::onHotkeyUp() {
     // Require at least 0.5 s to avoid accidental taps
     if (audio.size() < static_cast<size_t>(CAPTURE_SAMPLE_RATE / 2)) {
         impl_->mode.store(MODE_IDLE);
-        impl_->notifyStatus("● Idle");
+        impl_->notifyStatus(AppStatus::Idle);
         return;
     }
 
-    impl_->notifyStatus("⏳ Transcribing…");
+    impl_->notifyStatus(AppStatus::Transcribing);
 
     int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -263,7 +268,7 @@ void AppController::startSession() {
         impl_->output_dir, session_id, impl_->model_path, impl_->language
     );
     impl_->session_writer->setOnError([this](const std::string& msg) {
-        impl_->notifyStatus("⚠ " + msg);
+        impl_->notifyStatus(AppStatus::ErrorGeneric, msg);
     });
     impl_->worker->setOutputWriter(impl_->session_writer.get());
 
@@ -275,7 +280,7 @@ void AppController::startSession() {
         return;
     }
 
-    impl_->notifyStatus("🔴 Listening…");
+    impl_->notifyStatus(AppStatus::RecordingListening);
 }
 
 void AppController::stopSession() {
@@ -283,7 +288,7 @@ void AppController::stopSession() {
     if (!impl_->mode.compare_exchange_strong(expected, MODE_FINALIZING))
         return;
 
-    impl_->notifyStatus("⏳ Finalizing…");
+    impl_->notifyStatus(AppStatus::Finalizing);
 
     // Register cleanup to run once the worker drains all queued session chunks.
     // The callback fires on the worker thread; dispatch UI updates to main queue
@@ -296,7 +301,7 @@ void AppController::stopSession() {
             impl_->session_writer.reset();
         }
         impl_->mode.store(MODE_IDLE);
-        impl_->notifyStatus("● Idle");
+        impl_->notifyStatus(AppStatus::Idle);
     });
 
     // Flush any partial buffer still in the assembler (audio since last VAD flush).

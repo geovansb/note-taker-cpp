@@ -1,4 +1,5 @@
 #pragma once
+#include "app_status.h"
 #include <functional>
 #include <string>
 
@@ -59,10 +60,10 @@ public:
     void onHotkeyDown();
     void onHotkeyUp();
 
-    // Status change callback — called from any thread with a UTF-8 status string.
-    // Typical values: "● Idle", "⏺ Dictating…", "⏳ Transcribing…", "🔴 Recording",
-    //                 "⏳ Loading model…", "⚠ Model not found", "⚠ Mic denied".
-    void setOnStatusChange(std::function<void(std::string)> cb);
+    // Status change callback — called from any thread with a typed status event.
+    // Caller is responsible for dispatching to the main thread if UI updates
+    // are needed.
+    void setOnStatusChange(std::function<void(AppStatusEvent)> cb);
 
     // Dictation result callback — called from the worker thread with transcribed text.
     // AppDelegate uses this to invoke TextInjector (T4.4). Default: no-op.

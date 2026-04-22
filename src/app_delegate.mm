@@ -1,5 +1,6 @@
 #import "app_delegate.h"
 #include "app_controller.h"
+#include "app_status.h"
 #include "event_tap.h"
 #include "text_injector.h"
 #include <Carbon/Carbon.h>
@@ -64,7 +65,7 @@ static NSString* const kOutputDirKey   = @"output_dir";
         NSLog(@"[note-taker] System woke — audio capture resumed");
         dispatch_async(dispatch_get_main_queue(), ^{
             AppDelegate* d2 = weakSelfForSleep;
-            if (d2) [d2 setStatusTitle:@"⚠ Audio resumed after sleep"];
+            if (d2) [d2 setStatusTitle:@"⚠ Audio resumed after sleep"];  // local UI-only, not from controller
         });
     }];
 
@@ -154,36 +155,41 @@ static NSString* const kOutputDirKey   = @"output_dir";
     [self applyVadSensitivity:[[NSUserDefaults standardUserDefaults] stringForKey:kSensitivityKey]];
     _controller->setSilenceTimeout((float)[[NSUserDefaults standardUserDefaults] doubleForKey:kSilenceKey]);
 
-    _controller->setOnStatusChange([weakSelf](std::string status) {
+    _controller->setOnStatusChange([weakSelf](AppStatusEvent event) {
         // Called from any thread — dispatch UI updates to main queue.
-        NSString* s = [NSString stringWithUTF8String:status.c_str()];
+        AppStatus st = event.status;
+        std::string detail = std::move(event.detail);
         dispatch_async(dispatch_get_main_queue(), ^{
             AppDelegate* d = weakSelf;
             if (!d) return;
 
-            // "⚠ beep" is a synthetic status: play error sound but don't
-            // change the displayed status or icon.
-            if ([s isEqualToString:@"⚠ beep"]) {
+            // Beep is synthetic: play error sound, don't change display.
+            if (st == AppStatus::Beep) {
                 NSBeep();
                 return;
             }
 
+            // Build display label — append detail for error states.
+            std::string label = statusLabel(st);
+            if (!detail.empty()) label += " — " + detail;
+            NSString* s = [NSString stringWithUTF8String:label.c_str()];
+
             [d setStatusTitle:s];
-            [d updateMenuForStatus:s];
+            [d updateMenuForStatus:st];
 
             // Notify user when a recording session finishes.
-            if (d->_wasFinalizing && [s hasPrefix:@"● Idle"]) {
+            if (d->_wasFinalizing && st == AppStatus::Idle) {
                 d->_wasFinalizing = NO;
                 [d postSessionSavedNotification];
             }
-            if ([s hasPrefix:@"⏳ Finalizing"]) {
+            if (st == AppStatus::Finalizing) {
                 d->_wasFinalizing = YES;
             }
 
             // Show prominent alerts for startup errors.
-            if ([s hasPrefix:@"⚠ Model not found"]) {
+            if (st == AppStatus::ErrorModelNotFound) {
                 [d showModelMissingAlertForKey:d->_model];
-            } else if ([s hasPrefix:@"⚠ Mic denied"]) {
+            } else if (st == AppStatus::ErrorMicDenied) {
                 [d showMicDeniedAlert];
             }
         });
@@ -228,7 +234,7 @@ static NSString* const kOutputDirKey   = @"output_dir";
     _statusItem = [[NSStatusBar systemStatusBar]
                     statusItemWithLength:NSVariableStatusItemLength];
 
-    [self applyIconForStatus:@"● Idle"];
+    [self applyIconForStatus:AppStatus::Idle];
     _statusItem.menu = [self buildMenu];
 
     // macOS Tahoe 26+: warn if the system releases the status item because
@@ -515,7 +521,7 @@ static NSString* const kOutputDirKey   = @"output_dir";
     // directly in the menu bar: sound + temporary checkmark icon + status text.
     [[NSSound soundNamed:@"Glass"] play];
 
-    [self setStatusTitle:@"✓ Recording saved"];
+    [self setStatusTitle:[NSString stringWithUTF8String:statusLabel(AppStatus::RecordingSaved).c_str()]];
 
     // Show a checkmark icon for 4 seconds, then revert to idle.
     NSImage* checkImg = [NSImage imageWithSystemSymbolName:@"checkmark.circle.fill"
@@ -530,8 +536,9 @@ static NSString* const kOutputDirKey   = @"output_dir";
                    dispatch_get_main_queue(), ^{
         AppDelegate* d = weakSelf;
         if (!d) return;
-        [d setStatusTitle:@"● Idle"];
-        [d applyIconForStatus:@"● Idle"];
+        NSString* idleLabel = [NSString stringWithUTF8String:statusLabel(AppStatus::Idle).c_str()];
+        [d setStatusTitle:idleLabel];
+        [d applyIconForStatus:AppStatus::Idle];
     });
 }
 
@@ -687,24 +694,37 @@ static NSString* const kOutputDirKey   = @"output_dir";
     if (item) item.title = title;
 }
 
-- (void)applyIconForStatus:(NSString*)status {
+- (void)applyIconForStatus:(AppStatus)status {
     NSString* symbolName;
     NSString* a11yLabel;
-    if ([status hasPrefix:@"🔴"]) {
-        symbolName = @"record.circle.fill";
-        a11yLabel  = @"note-taker: recording session";
-    } else if ([status hasPrefix:@"⏺"]) {
-        symbolName = @"mic";
-        a11yLabel  = @"note-taker: dictating";
-    } else if ([status hasPrefix:@"⏳"]) {
-        symbolName = @"waveform";
-        a11yLabel  = @"note-taker: processing";
-    } else if ([status hasPrefix:@"⚠"]) {
-        symbolName = @"mic.fill";
-        a11yLabel  = @"note-taker: error";
-    } else {
-        symbolName = @"mic.fill";
-        a11yLabel  = @"note-taker: idle";
+    switch (status) {
+        case AppStatus::RecordingListening:
+        case AppStatus::RecordingCapturing:
+            symbolName = @"record.circle.fill";
+            a11yLabel  = @"note-taker: recording session";
+            break;
+        case AppStatus::Dictating:
+            symbolName = @"mic";
+            a11yLabel  = @"note-taker: dictating";
+            break;
+        case AppStatus::LoadingModel:
+        case AppStatus::Transcribing:
+        case AppStatus::Finalizing:
+            symbolName = @"waveform";
+            a11yLabel  = @"note-taker: processing";
+            break;
+        case AppStatus::ErrorModelNotFound:
+        case AppStatus::ErrorMicDenied:
+        case AppStatus::ErrorAudioDeviceChanged:
+        case AppStatus::ErrorTranscription:
+        case AppStatus::ErrorGeneric:
+            symbolName = @"mic.fill";
+            a11yLabel  = @"note-taker: error";
+            break;
+        default:
+            symbolName = @"mic.fill";
+            a11yLabel  = @"note-taker: idle";
+            break;
     }
 
     NSImage* img = [NSImage imageWithSystemSymbolName:symbolName
@@ -718,32 +738,30 @@ static NSString* const kOutputDirKey   = @"output_dir";
     _statusItem.button.accessibilityLabel = a11yLabel;
 }
 
-- (void)updateMenuForStatus:(NSString*)status {
+- (void)updateMenuForStatus:(AppStatus)status {
     // Must be called on the main thread.
     NSMenuItem* startRec = [_statusItem.menu itemWithTag:2];
     NSMenuItem* stopRec  = [_statusItem.menu itemWithTag:3];
 
-    BOOL isIdle      = [status hasPrefix:@"● Idle"];
-    BOOL isRecording = [status hasPrefix:@"🔴"];
+    BOOL isIdle      = (status == AppStatus::Idle || status == AppStatus::RecordingSaved);
+    BOOL isRecording = (status == AppStatus::RecordingListening ||
+                        status == AppStatus::RecordingCapturing);
 
     startRec.enabled = isIdle;
     stopRec.enabled  = isRecording;
 
     // Show contextual hints when both buttons are disabled (FINALIZING,
     // TRANSCRIBING, DICTATING) so the user knows something is in progress.
-    if (isIdle) {
+    if (isIdle || isRecording) {
         startRec.title = @"▶  Start Recording";
         stopRec.title  = @"■  Stop Recording";
-    } else if (isRecording) {
-        startRec.title = @"▶  Start Recording";
-        stopRec.title  = @"■  Stop Recording";
-    } else if ([status hasPrefix:@"⏳ Finalizing"]) {
+    } else if (status == AppStatus::Finalizing) {
         startRec.title = @"⏳ Finalizing, please wait…";
         stopRec.title  = @"■  Stop Recording";
-    } else if ([status hasPrefix:@"⏺"]) {
+    } else if (status == AppStatus::Dictating) {
         startRec.title = @"⏺  Dictating… (release key to stop)";
         stopRec.title  = @"■  Stop Recording";
-    } else if ([status hasPrefix:@"⏳"]) {
+    } else if (status == AppStatus::Transcribing || status == AppStatus::LoadingModel) {
         startRec.title = @"⏳ Processing, please wait…";
         stopRec.title  = @"■  Stop Recording";
     }
