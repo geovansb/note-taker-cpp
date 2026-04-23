@@ -141,6 +141,18 @@ struct AppController::Impl {
 
         if (old_thread.joinable()) old_thread.join();
     }
+
+    void flushSessionTail() {
+        if (assembler) assembler->forceFlush();
+    }
+
+    void closeSessionWriter() {
+        if (worker) worker->setOutputWriter(nullptr);
+        if (session_writer) {
+            session_writer->flush();
+            session_writer.reset();
+        }
+    }
 };
 
 // ── AppController ─────────────────────────────────────────────────────────────
@@ -273,14 +285,21 @@ void AppController::stop() {
 
     impl_->stopMic();
 
-    // Flush any active session before stopping the worker
+    // Stop any pending finalize callback first. During shutdown we want one
+    // synchronous drain path, not a concurrent on_session_done callback racing
+    // against teardown.
+    if (impl_->worker) impl_->worker->setOnSessionDone({});
+
+    // If a recording session is active or finalizing, push the last buffered
+    // audio into the worker queue before draining it.
     if (impl_->session_writer) {
-        impl_->session_writer->flush();
-        impl_->worker->setOutputWriter(nullptr);
-        impl_->session_writer.reset();
+        impl_->flushSessionTail();
     }
 
-    impl_->worker->stop(); // drains queue, then joins
+    if (impl_->worker) {
+        impl_->worker->stop(); // drains queue, then joins
+    }
+    impl_->closeSessionWriter();
     impl_->mode_machine.reset();
 }
 
@@ -378,23 +397,20 @@ void AppController::stopSession() {
     if (!impl_->mode_machine.stopRecord())
         return; // Finalizing status emitted by ModeMachine
 
+    // Stop the producer first so no more callbacks can append to the assembler
+    // while we are flushing and waiting for the worker queue to drain.
+    impl_->stopMic();
+
+    // Flush any partial buffer still in the assembler (audio since last VAD flush)
+    // before arming the drain callback. Otherwise the worker can observe an empty
+    // queue and finalize the session before the tail chunk is enqueued.
+    impl_->flushSessionTail();
+
     // Register cleanup to run once the worker drains all queued session chunks.
-    // The callback fires on the worker thread; dispatch UI updates to main queue
-    // from within the callback (the caller — AppDelegate — will handle that via
-    // the notifyStatus path which already dispatches to main queue).
+    // The callback fires on the worker thread; AppDelegate already dispatches
+    // UI work to the main queue through notifyStatus.
     impl_->worker->setOnSessionDone([this] {
-        impl_->worker->setOutputWriter(nullptr);
-        if (impl_->session_writer) {
-            impl_->session_writer->flush();
-            impl_->session_writer.reset();
-        }
+        impl_->closeSessionWriter();
         impl_->mode_machine.finalizeDone(); // back to Idle
     });
-
-    // Flush any partial buffer still in the assembler (audio since last VAD flush).
-    // This enqueues one more chunk to the worker before the queue drains.
-    impl_->assembler->forceFlush();
-
-    // Release mic now — all audio has been captured and flushed.
-    impl_->stopMic();
 }
