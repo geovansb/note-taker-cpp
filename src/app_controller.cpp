@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <ctime>
 #include <memory>
@@ -48,7 +49,7 @@ struct AppController::Impl {
     // Back-pointer — valid for the lifetime of AppController
     AppController* owner = nullptr;
 
-    bool started = false;
+    std::atomic<bool> started{false};
 
     // Guards async mic startup for dictation: set true in onHotkeyDown,
     // false in onHotkeyUp. The background thread checks before/after
@@ -57,8 +58,11 @@ struct AppController::Impl {
     std::atomic<bool> mic_wanted{false};
     std::atomic<bool> shutting_down{false};
     std::mutex        mic_mutex;
-    std::mutex        mic_thread_mutex;
-    std::thread       mic_start_thread;
+    std::mutex        mic_request_mutex;
+    std::condition_variable mic_cv;
+    std::thread       mic_control_thread;
+    bool              mic_start_requested = false;
+    bool              mic_thread_stop = false;
     bool              mic_running = false;
 
     void notifyStatus(AppStatus s) {
@@ -94,52 +98,69 @@ struct AppController::Impl {
         mic_running = false;
     }
 
-    void joinMicStartThread() {
-        std::thread t;
+    void startMicControlThread() {
         {
-            std::lock_guard<std::mutex> lock(mic_thread_mutex);
-            if (mic_start_thread.joinable()) {
-                t = std::move(mic_start_thread);
-            }
+            std::lock_guard<std::mutex> lock(mic_request_mutex);
+            mic_thread_stop = false;
+            mic_start_requested = false;
         }
-        if (t.joinable()) t.join();
+
+        mic_control_thread = std::thread([this] {
+            std::unique_lock<std::mutex> lock(mic_request_mutex);
+            while (true) {
+                mic_cv.wait(lock, [this] {
+                    return mic_thread_stop || mic_start_requested;
+                });
+
+                if (mic_thread_stop) break;
+                mic_start_requested = false;
+                lock.unlock();
+
+                if (!mic_wanted.load(std::memory_order_acquire) ||
+                    shutting_down.load(std::memory_order_acquire)) {
+                    lock.lock();
+                    continue;
+                }
+
+                if (!startMic()) {
+                    if (!shutting_down.load(std::memory_order_acquire) &&
+                        mic_wanted.load(std::memory_order_acquire)) {
+                        mode_machine.cancelDictation(); // back to Idle
+                        notifyStatus(AppStatus::ErrorMicDenied);
+                    }
+                    lock.lock();
+                    continue;
+                }
+
+                // If the key was released while startup was in flight, stop the
+                // mic once startMic() returns instead of leaving capture active.
+                if (!mic_wanted.load(std::memory_order_acquire) ||
+                    shutting_down.load(std::memory_order_acquire)) {
+                    stopMic();
+                }
+
+                lock.lock();
+            }
+        });
     }
 
-    void startMicAsyncForDictation() {
-        std::thread old_thread;
-        bool launch_new_thread = false;
+    void stopMicControlThread() {
         {
-            std::lock_guard<std::mutex> lock(mic_thread_mutex);
-            if (mic_start_thread.joinable()) {
-                old_thread = std::move(mic_start_thread);
-            }
-            launch_new_thread = !shutting_down.load(std::memory_order_acquire);
-            if (launch_new_thread) {
-                mic_start_thread = std::thread([this] {
-                    if (!mic_wanted.load(std::memory_order_acquire) ||
-                        shutting_down.load(std::memory_order_acquire)) {
-                        return;
-                    }
-
-                    if (!startMic()) {
-                        if (!shutting_down.load(std::memory_order_acquire)) {
-                            mode_machine.cancelDictation(); // back to Idle
-                            notifyStatus(AppStatus::ErrorMicDenied);
-                        }
-                        return;
-                    }
-
-                    // If the key was released while startup was in flight, stop the
-                    // mic once startMic() returns instead of leaving capture active.
-                    if (!mic_wanted.load(std::memory_order_acquire) ||
-                        shutting_down.load(std::memory_order_acquire)) {
-                        stopMic();
-                    }
-                });
-            }
+            std::lock_guard<std::mutex> lock(mic_request_mutex);
+            mic_thread_stop = true;
+            mic_start_requested = false;
         }
+        mic_cv.notify_all();
 
-        if (old_thread.joinable()) old_thread.join();
+        if (mic_control_thread.joinable()) mic_control_thread.join();
+    }
+
+    void requestMicStartForDictation() {
+        {
+            std::lock_guard<std::mutex> lock(mic_request_mutex);
+            mic_start_requested = true;
+        }
+        mic_cv.notify_one();
     }
 
     void flushSessionTail() {
@@ -213,8 +234,9 @@ bool AppController::isRecording() const {
 }
 
 bool AppController::start() {
-    if (impl_->started) return true;
+    if (impl_->started.load(std::memory_order_acquire)) return true;
     impl_->shutting_down.store(false, std::memory_order_release);
+    impl_->startMicControlThread();
 
     impl_->notifyStatus(AppStatus::LoadingModel);
 
@@ -238,6 +260,7 @@ bool AppController::start() {
 
     if (!impl_->worker->start()) {
         impl_->worker.reset(); // prevent enqueue() on a null whisper context
+        impl_->stopMicControlThread();
         impl_->notifyStatus(AppStatus::ErrorModelNotFound);
         return false;
     }
@@ -271,17 +294,16 @@ bool AppController::start() {
                             "Audio recovery failed — restart required");
     });
 
-    impl_->started = true;
+    impl_->started.store(true, std::memory_order_release);
     impl_->notifyStatus(AppStatus::Idle);
     return true;
 }
 
 void AppController::stop() {
-    if (!impl_->started) return;
-    impl_->started = false;
+    if (!impl_->started.exchange(false, std::memory_order_acq_rel)) return;
     impl_->mic_wanted.store(false, std::memory_order_release);
     impl_->shutting_down.store(true, std::memory_order_release);
-    impl_->joinMicStartThread();
+    impl_->stopMicControlThread();
 
     impl_->stopMic();
 
@@ -307,7 +329,7 @@ void AppController::stop() {
 
 void AppController::onHotkeyDown() {
     // Reject if the controller hasn't fully started yet (model still loading).
-    if (!impl_->started) return;
+    if (!impl_->started.load(std::memory_order_acquire)) return;
 
     {
         std::lock_guard<std::mutex> lock(impl_->dict_mutex);
@@ -320,7 +342,7 @@ void AppController::onHotkeyDown() {
     // responsive. If we blocked here (~300ms for AVAudioEngine init), the
     // key-up event would queue and fire immediately after, capturing zero audio.
     impl_->mic_wanted.store(true, std::memory_order_release);
-    impl_->startMicAsyncForDictation();
+    impl_->requestMicStartForDictation();
 }
 
 void AppController::onHotkeyUp() {
@@ -358,7 +380,6 @@ void AppController::onHotkeyUp() {
 
 void AppController::startSession() {
     impl_->mic_wanted.store(false, std::memory_order_release);
-    impl_->joinMicStartThread();
 
     // Build session ID and set OutputWriter BEFORE changing mode to RECORDING,
     // so the worker already has a writer when the first audio frames arrive.
