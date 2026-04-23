@@ -15,6 +15,24 @@ struct AudioCapture::Impl {
     std::function<void()> on_recovery_failed;
     std::function<void(const float*, size_t)> on_block; // kept for tap reinstall
 
+    void resetEngineState() {
+        if (configObserver) {
+            [[NSNotificationCenter defaultCenter] removeObserver:configObserver];
+            configObserver = nil;
+        }
+        if (engine) {
+            @try {
+                [engine.inputNode removeTapOnBus:0];
+            } @catch (__unused NSException* ex) {
+                // start() can fail before a tap is installed; teardown must stay best-effort.
+            }
+            [engine stop];
+            engine = nil;
+        }
+        converter = nil;
+        outBuf    = nil;
+    }
+
     // (Re)install tap + converter on the current engine's input node.
     // Called from start() and from the config-change notification handler.
     bool installTap() {
@@ -128,6 +146,10 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
         return false;
     }
 
+    // If a previous start attempt failed after partially initializing the
+    // engine, clear it out before we try again.
+    impl_->resetEngineState();
+
     impl_->on_block = on_block;
     impl_->engine = [[AVAudioEngine alloc] init];
 
@@ -136,7 +158,10 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
     // and throws "required condition is false: inputNode != nullptr".
     (void)impl_->engine.inputNode;
 
-    if (!impl_->installTap()) return false;
+    if (!impl_->installTap()) {
+        impl_->resetEngineState();
+        return false;
+    }
 
     // Monitor audio configuration changes (device unplug, format change).
     // On change: tear down old tap/converter, reconfigure for new hardware, reinstall.
@@ -201,6 +226,7 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
     if (err) {
         fprintf(stderr, "error: AVAudioEngine failed to start: %s\n",
                 err.localizedDescription.UTF8String);
+        impl_->resetEngineState();
         return false;
     }
 
@@ -208,17 +234,7 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
 }
 
 void AudioCapture::stop() {
-    if (impl_->configObserver) {
-        [[NSNotificationCenter defaultCenter] removeObserver:impl_->configObserver];
-        impl_->configObserver = nil;
-    }
-    if (impl_->engine) {
-        [impl_->engine.inputNode removeTapOnBus:0];
-        [impl_->engine stop];
-        impl_->converter = nil;
-        impl_->outBuf    = nil;
-        impl_->engine    = nil;
-    }
+    impl_->resetEngineState();
 }
 
 void AudioCapture::setOnConfigChange(std::function<void()> cb) {
