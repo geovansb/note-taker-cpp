@@ -1,6 +1,7 @@
 #import "app_delegate.h"
 #include "app_controller.h"
 #include "app_status.h"
+#include "dictation_history.h"
 #include "event_tap.h"
 #include "text_injector.h"
 #include <Carbon/Carbon.h>
@@ -12,20 +13,27 @@ static NSString* const kHotkeyKey    = @"hotkey_keycode";
 static NSString* const kSensitivityKey = @"vad_sensitivity";
 static NSString* const kSilenceKey     = @"silence_timeout";
 static NSString* const kOutputDirKey   = @"output_dir";
-static NSString* const kClipboardCleanupModeKey = @"clipboard_cleanup_mode";
-static NSString* const kClipboardClearDelayKey  = @"clipboard_clear_delay";
-static NSString* const kClipboardModeKeep       = @"keep";
-static NSString* const kClipboardModeClear      = @"clear";
+static NSString* const kDictationHistoryEnabledKey = @"dictation_history_enabled";
+
+static constexpr NSInteger kTagStatus             = 1;
+static constexpr NSInteger kTagStartRecording     = 2;
+static constexpr NSInteger kTagStopRecording      = 3;
+static constexpr NSInteger kTagHotkeyHint         = 7;
+static constexpr NSInteger kTagRecentDictations   = 10;
 
 @implementation AppDelegate {
     NSStatusItem*  _statusItem;
+    NSWindow*      _settingsWindow;
+    NSView*        _settingsContentView;
     AppController* _controller;   // owned; stopped and deleted in applicationWillTerminate:
     EventTap       _eventTap;     // owned; lives on main thread, forwards to controller
     NSTimer*       _accessibilityRetryTimer;
+    DictationHistory _dictationHistory;
     std::string    _outputDir;
     NSString*      _language;
     NSString*      _model;        // selected for next restart
     NSString*      _activeModel;  // currently loaded
+    NSString*      _settingsCategory;
     int            _hotkeyCode;
     BOOL           _wasFinalizing; // track session finalize → idle transition
 }
@@ -45,12 +53,12 @@ static NSString* const kClipboardModeClear      = @"clear";
         kSensitivityKey: @"medium",
         kSilenceKey:     @5.0,
         kOutputDirKey:   defaultNotesDir,
-        kClipboardCleanupModeKey: kClipboardModeClear,
-        kClipboardClearDelayKey:  @1,
+        kDictationHistoryEnabledKey: @NO,
     }];
     _language     = [[NSUserDefaults standardUserDefaults] stringForKey:kLangKey];
     _model        = [[NSUserDefaults standardUserDefaults] stringForKey:kModelKey];
     _activeModel  = _model;  // loaded model = selected at launch
+    _settingsCategory = @"General";
     _hotkeyCode   = (int)[[NSUserDefaults standardUserDefaults] integerForKey:kHotkeyKey];
 
     // Monitor sleep/wake to handle audio interruption gracefully.
@@ -86,6 +94,11 @@ static NSString* const kClipboardModeClear      = @"clear";
         _accessibilityRetryTimer = nil;
     }
     _eventTap.stop();
+    if (_settingsWindow) {
+        [_settingsWindow close];
+        _settingsWindow = nil;
+        _settingsContentView = nil;
+    }
     if (_controller) {
         _controller->stop();
         delete _controller;
@@ -254,6 +267,11 @@ static NSString* const kClipboardModeClear      = @"clear";
         dispatch_async(dispatch_get_main_queue(), ^{
             AppDelegate* d = weakSelf;
             if (!d) return;
+            if ([d dictationHistoryEnabled]) {
+                d->_dictationHistory.add(text);
+                [d refreshRecentDictationsMenu];
+                [d rebuildSettingsContent];
+            }
             injectText(text);
         });
     });
@@ -308,10 +326,9 @@ static NSString* const kClipboardModeClear      = @"clear";
 - (NSMenu*)buildMenu {
     NSMenu* menu = [[NSMenu alloc] init];
 
-    // tag 1 — dynamic status (updated via setStatusTitle:)
     NSMenuItem* statusItem = [[NSMenuItem alloc] initWithTitle:@"● Idle"
                                action:nil keyEquivalent:@""];
-    statusItem.tag     = 1;
+    statusItem.tag     = kTagStatus;
     statusItem.enabled = NO;
     [menu addItem:statusItem];
 
@@ -320,68 +337,42 @@ static NSString* const kClipboardModeClear      = @"clear";
     NSMenuItem* hint = [[NSMenuItem alloc] initWithTitle:
         [NSString stringWithFormat:@"Hold %@ to dictate", [self labelForKeycode:_hotkeyCode]]
                          action:nil keyEquivalent:@""];
-    hint.tag     = 7;
+    hint.tag     = kTagHotkeyHint;
     hint.enabled = NO;
     [menu addItem:hint];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
-    // tag 2 — Start Recording (enabled when IDLE)
     NSMenuItem* startRec = [[NSMenuItem alloc] initWithTitle:@"▶  Start Recording"
                              action:@selector(startRecording:) keyEquivalent:@"r"];
     startRec.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-    startRec.tag     = 2;
+    startRec.tag     = kTagStartRecording;
     startRec.enabled = NO;  // enabled once model loads (updateMenuForStatus:)
     [menu addItem:startRec];
 
-    // tag 3 — Stop Recording (enabled when RECORDING)  Cmd+Shift+R
     NSMenuItem* stopRec = [[NSMenuItem alloc] initWithTitle:@"■  Stop Recording"
                             action:@selector(stopRecording:) keyEquivalent:@"r"];
     stopRec.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
-    stopRec.tag     = 3;
+    stopRec.tag     = kTagStopRecording;
     stopRec.enabled = NO;
     [menu addItem:stopRec];
 
-    // Recording Settings submenu
-    NSMenuItem* recSettingsParent = [[NSMenuItem alloc] initWithTitle:@"Recording Settings"
-                                      action:nil keyEquivalent:@""];
-    recSettingsParent.submenu = [self buildRecordingSettingsMenu];
-    [menu addItem:recSettingsParent];
+    NSMenuItem* openFolder = [[NSMenuItem alloc] initWithTitle:@"Open Notes Folder"
+                              action:@selector(openNotesFolder:) keyEquivalent:@"o"];
+    openFolder.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+    [menu addItem:openFolder];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
-    // tag 8 — Language submenu (title shows active language)
-    NSMenuItem* langParent = [[NSMenuItem alloc] initWithTitle:
-        [NSString stringWithFormat:@"Language — %@", [self labelForLanguage:_language]]
-                               action:nil keyEquivalent:@""];
-    langParent.tag     = 8;
-    langParent.submenu = [self buildLanguageMenu];
-    [menu addItem:langParent];
-
-    // tag 6 — Model submenu (title shows loaded model, rebuilt in selectModel:)
-    NSMenuItem* modelParent = [[NSMenuItem alloc] initWithTitle:
-        [NSString stringWithFormat:@"Model — %@", _activeModel]
+    NSMenuItem* recentParent = [[NSMenuItem alloc] initWithTitle:@"Recent Dictations"
                                 action:nil keyEquivalent:@""];
-    modelParent.tag     = 6;
-    modelParent.submenu = [self buildModelMenu];
-    [menu addItem:modelParent];
-
-    // Hotkey submenu
-    NSMenuItem* hotkeyParent = [[NSMenuItem alloc] initWithTitle:@"Dictation Hotkey"
-                                 action:nil keyEquivalent:@""];
-    hotkeyParent.submenu = [self buildHotkeyMenu];
-    [menu addItem:hotkeyParent];
-
-    NSMenuItem* clipboardParent = [[NSMenuItem alloc] initWithTitle:[self clipboardMenuTitle]
-                                    action:nil keyEquivalent:@""];
-    clipboardParent.tag     = 9;
-    clipboardParent.submenu = [self buildClipboardMenu];
-    [menu addItem:clipboardParent];
+    recentParent.tag = kTagRecentDictations;
+    recentParent.submenu = [self buildRecentDictationsMenu];
+    [menu addItem:recentParent];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
-    [menu addItemWithTitle:@"About note-taker"
-                    action:@selector(showAbout:) keyEquivalent:@""];
+    [menu addItemWithTitle:@"Settings…" action:@selector(showSettings:) keyEquivalent:@","];
     [menu addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
 
     return menu;
@@ -395,53 +386,56 @@ static NSString* const kClipboardModeClear      = @"clear";
     return map[key] ?: key;
 }
 
-- (NSMenu*)buildLanguageMenu {
-    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Language"];
-    NSArray<NSString*>* keys   = @[@"auto", @"pt", @"en", @"es"];
-    NSArray<NSString*>* labels = @[@"Auto", @"Português", @"English", @"Español"];
-    for (NSUInteger i = 0; i < keys.count; i++) {
-        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:labels[i]
-                             action:@selector(selectLanguage:) keyEquivalent:@""];
-        item.representedObject = keys[i];
-        item.state = [keys[i] isEqualToString:_language]
-                     ? NSControlStateValueOn : NSControlStateValueOff;
-        [sub addItem:item];
+- (BOOL)dictationHistoryEnabled {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:kDictationHistoryEnabledKey];
+}
+
+- (NSString*)previewForHistoryText:(NSString*)text {
+    NSString* collapsed = [[text componentsSeparatedByCharactersInSet:
+        [NSCharacterSet newlineCharacterSet]] componentsJoinedByString:@" "];
+    while ([collapsed containsString:@"  "]) {
+        collapsed = [collapsed stringByReplacingOccurrencesOfString:@"  " withString:@" "];
     }
+    if (collapsed.length <= 64) return collapsed;
+    return [[collapsed substringToIndex:64] stringByAppendingString:@"…"];
+}
+
+- (NSMenu*)buildRecentDictationsMenu {
+    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Recent Dictations"];
+    if (![self dictationHistoryEnabled]) {
+        NSMenuItem* disabled = [[NSMenuItem alloc] initWithTitle:@"History disabled"
+                                  action:nil keyEquivalent:@""];
+        disabled.enabled = NO;
+        [sub addItem:disabled];
+        return sub;
+    }
+
+    const auto& items = _dictationHistory.items();
+    if (items.empty()) {
+        NSMenuItem* empty = [[NSMenuItem alloc] initWithTitle:@"No recent dictations"
+                              action:nil keyEquivalent:@""];
+        empty.enabled = NO;
+        [sub addItem:empty];
+        return sub;
+    }
+
+    for (const auto& item : items) {
+        NSString* text = [NSString stringWithUTF8String:item.c_str()];
+        if (!text) continue;
+        NSMenuItem* menuItem = [[NSMenuItem alloc] initWithTitle:[self previewForHistoryText:text]
+                                  action:@selector(copyRecentDictation:) keyEquivalent:@""];
+        menuItem.representedObject = text;
+        [sub addItem:menuItem];
+    }
+    [sub addItem:[NSMenuItem separatorItem]];
+    [sub addItemWithTitle:@"Clear History" action:@selector(clearDictationHistory:) keyEquivalent:@""];
     return sub;
 }
 
-- (NSMenu*)buildModelMenu {
-    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Model"];
-    NSArray<NSString*>* models = @[
-        @"large-v3",
-        @"large-v3-turbo",
-    ];
-
-    // Pending restart hint
-    if (![_model isEqualToString:_activeModel]) {
-        NSMenuItem* pending = [[NSMenuItem alloc] initWithTitle:
-            [NSString stringWithFormat:@"⟳ %@ on next restart", _model]
-                                action:nil keyEquivalent:@""];
-        pending.enabled = NO;
-        [sub addItem:pending];
-        [sub addItem:[NSMenuItem separatorItem]];
-    }
-
-    for (NSString* m in models) {
-        NSString* path   = [self modelPathForKey:m];
-        BOOL      exists = [[NSFileManager defaultManager] fileExistsAtPath:path];
-        NSString* title  = exists ? m : [m stringByAppendingString:@"  ⚠ not downloaded"];
-        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title
-                             action:@selector(selectModel:) keyEquivalent:@""];
-        item.representedObject = m;
-        // Checkmark on the currently loaded model
-        item.state = [m isEqualToString:_activeModel] ? NSControlStateValueOn : NSControlStateValueOff;
-        if (!exists) {
-            item.toolTip = [NSString stringWithFormat:@"Run: ./scripts/download_model.sh %@", m];
-        }
-        [sub addItem:item];
-    }
-    return sub;
+- (void)refreshRecentDictationsMenu {
+    NSMenuItem* parent = [_statusItem.menu itemWithTag:kTagRecentDictations];
+    if (!parent) return;
+    parent.submenu = [self buildRecentDictationsMenu];
 }
 
 - (NSString*)labelForKeycode:(int)code {
@@ -452,100 +446,6 @@ static NSString* const kClipboardModeClear      = @"clear";
         case kVK_Function:     return @"Fn";
         default:               return [NSString stringWithFormat:@"Key 0x%02X", code];
     }
-}
-
-- (NSMenu*)buildHotkeyMenu {
-    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Hotkey"];
-    int codes[] = { kVK_RightOption, kVK_Option, kVK_RightCommand, kVK_Function };
-    for (int code : codes) {
-        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:[self labelForKeycode:code]
-                             action:@selector(selectHotkey:) keyEquivalent:@""];
-        item.tag   = code;
-        item.state = (code == _hotkeyCode) ? NSControlStateValueOn : NSControlStateValueOff;
-        [sub addItem:item];
-    }
-    return sub;
-}
-
-- (NSInteger)clipboardClearDelay {
-    NSInteger seconds = [[NSUserDefaults standardUserDefaults] integerForKey:kClipboardClearDelayKey];
-    if (seconds < 1) return 1;
-    if (seconds > 59) return 59;
-    return seconds;
-}
-
-- (BOOL)clipboardShouldClear {
-    NSString* mode = [[NSUserDefaults standardUserDefaults] stringForKey:kClipboardCleanupModeKey];
-    return ![mode isEqualToString:kClipboardModeKeep];
-}
-
-- (int)clipboardClearDelaySecondsForInjection {
-    return [self clipboardShouldClear] ? (int)[self clipboardClearDelay] : 0;
-}
-
-- (NSString*)clipboardMenuTitle {
-    if (![self clipboardShouldClear]) return @"Clipboard — Keep";
-    return [NSString stringWithFormat:@"Clipboard — Clear after %ld seconds",
-                                      (long)[self clipboardClearDelay]];
-}
-
-- (void)refreshClipboardMenu {
-    NSMenuItem* parent = [_statusItem.menu itemWithTag:9];
-    if (!parent) return;
-    parent.title = [self clipboardMenuTitle];
-    parent.submenu = [self buildClipboardMenu];
-}
-
-- (NSMenu*)buildClipboardMenu {
-    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Clipboard"];
-    BOOL shouldClear = [self clipboardShouldClear];
-    NSInteger delay = [self clipboardClearDelay];
-
-    NSMenuItem* keep = [[NSMenuItem alloc] initWithTitle:@"Keep"
-                         action:@selector(selectClipboardKeep:) keyEquivalent:@""];
-    keep.state = shouldClear ? NSControlStateValueOff : NSControlStateValueOn;
-    [sub addItem:keep];
-
-    NSMenuItem* clear = [[NSMenuItem alloc] initWithTitle:
-        [NSString stringWithFormat:@"Clear after %ld seconds…", (long)delay]
-                            action:@selector(selectClipboardClearAfter:) keyEquivalent:@""];
-    clear.state = shouldClear ? NSControlStateValueOn : NSControlStateValueOff;
-    [sub addItem:clear];
-
-    return sub;
-}
-
-- (NSMenu*)buildRecordingSettingsMenu {
-    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Recording Settings"];
-
-    // Open Notes Folder  Cmd+O (tag 4)
-    NSMenuItem* openFolder = [[NSMenuItem alloc] initWithTitle:@"Open Notes Folder"
-                               action:@selector(openNotesFolder:) keyEquivalent:@"o"];
-    openFolder.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-    openFolder.tag     = 4;
-    openFolder.enabled = YES;
-    [sub addItem:openFolder];
-
-    // Change Notes Folder…
-    NSMenuItem* changeFolder = [[NSMenuItem alloc] initWithTitle:@"Change Notes Folder…"
-                                 action:@selector(changeNotesFolder:) keyEquivalent:@""];
-    [sub addItem:changeFolder];
-
-    [sub addItem:[NSMenuItem separatorItem]];
-
-    // VAD Sensitivity
-    NSMenuItem* sensitivityParent = [[NSMenuItem alloc] initWithTitle:@"VAD Sensitivity"
-                                      action:nil keyEquivalent:@""];
-    sensitivityParent.submenu = [self buildSensitivityMenu];
-    [sub addItem:sensitivityParent];
-
-    // Silence Timeout
-    NSMenuItem* silenceParent = [[NSMenuItem alloc] initWithTitle:@"Silence Timeout"
-                                  action:nil keyEquivalent:@""];
-    silenceParent.submenu = [self buildSilenceTimeoutMenu];
-    [sub addItem:silenceParent];
-
-    return sub;
 }
 
 - (void)applyVadSensitivity:(NSString*)key {
@@ -559,36 +459,229 @@ static NSString* const kClipboardModeClear      = @"clear";
     if (_controller) _controller->setVadSensitivity(threshold, gain);
 }
 
-- (NSMenu*)buildSensitivityMenu {
-    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Sensitivity"];
-    NSString* current = [[NSUserDefaults standardUserDefaults] stringForKey:kSensitivityKey];
-    NSArray<NSString*>* keys   = @[@"low", @"medium", @"high"];
-    NSArray<NSString*>* labels = @[@"Low", @"Medium", @"High"];
-    for (NSUInteger i = 0; i < keys.count; i++) {
-        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:labels[i]
-                             action:@selector(selectSensitivity:) keyEquivalent:@""];
-        item.representedObject = keys[i];
-        item.state = [keys[i] isEqualToString:current]
-                     ? NSControlStateValueOn : NSControlStateValueOff;
-        [sub addItem:item];
-    }
-    return sub;
+// ── Settings window ────────────────────────────────────────────────────────────
+
+- (NSTextField*)labelWithText:(NSString*)text fontSize:(CGFloat)fontSize bold:(BOOL)bold {
+    NSTextField* label = [NSTextField labelWithString:text];
+    label.font = bold ? [NSFont boldSystemFontOfSize:fontSize] : [NSFont systemFontOfSize:fontSize];
+    label.lineBreakMode = NSLineBreakByWordWrapping;
+    label.maximumNumberOfLines = 0;
+    return label;
 }
 
-- (NSMenu*)buildSilenceTimeoutMenu {
-    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Silence Timeout"];
-    float current = (float)[[NSUserDefaults standardUserDefaults] doubleForKey:kSilenceKey];
-    float values[] = { 2.0f, 3.0f, 5.0f, 8.0f, 10.0f };
-    for (float v : values) {
-        NSString* title = [NSString stringWithFormat:@"%.0fs", v];
-        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title
-                             action:@selector(selectSilenceTimeout:) keyEquivalent:@""];
-        item.representedObject = @(v);
-        item.state = (fabsf(v - current) < 0.1f)
-                     ? NSControlStateValueOn : NSControlStateValueOff;
-        [sub addItem:item];
+- (void)addLabel:(NSString*)label control:(NSView*)control toStack:(NSStackView*)stack {
+    NSTextField* labelView = [self labelWithText:label fontSize:13 bold:NO];
+    NSStackView* row = [NSStackView stackViewWithViews:@[
+        labelView,
+        control
+    ]];
+    row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row.alignment = NSLayoutAttributeCenterY;
+    row.spacing = 16;
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    labelView.translatesAutoresizingMaskIntoConstraints = NO;
+    control.translatesAutoresizingMaskIntoConstraints = NO;
+    [labelView.widthAnchor constraintEqualToConstant:130].active = YES;
+    [control.widthAnchor constraintGreaterThanOrEqualToConstant:220].active = YES;
+    [stack addArrangedSubview:row];
+}
+
+- (NSPopUpButton*)popupWithLabels:(NSArray<NSString*>*)labels values:(NSArray*)values
+                          current:(id)current action:(SEL)action {
+    NSPopUpButton* popup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    for (NSUInteger i = 0; i < labels.count; ++i) {
+        [popup addItemWithTitle:labels[i]];
+        popup.lastItem.representedObject = values[i];
+        if ([values[i] isEqual:current]) [popup selectItem:popup.lastItem];
     }
-    return sub;
+    popup.target = self;
+    popup.action = action;
+    return popup;
+}
+
+- (NSButton*)settingsSidebarButton:(NSString*)title category:(NSString*)category {
+    NSButton* button = [NSButton buttonWithTitle:title target:self action:@selector(selectSettingsCategory:)];
+    button.bezelStyle = NSBezelStyleRegularSquare;
+    button.bordered = NO;
+    button.alignment = NSTextAlignmentLeft;
+    button.identifier = category;
+    button.state = [_settingsCategory isEqualToString:category] ? NSControlStateValueOn : NSControlStateValueOff;
+    return button;
+}
+
+- (void)showSettings:(id)__unused sender {
+    if (!_settingsWindow) {
+        NSRect frame = NSMakeRect(0, 0, 720, 460);
+        _settingsWindow = [[NSWindow alloc] initWithContentRect:frame
+                                                      styleMask:(NSWindowStyleMaskTitled |
+                                                                 NSWindowStyleMaskClosable |
+                                                                 NSWindowStyleMaskMiniaturizable)
+                                                        backing:NSBackingStoreBuffered
+                                                          defer:NO];
+        _settingsWindow.title = @"Settings";
+        _settingsWindow.releasedWhenClosed = NO;
+
+        NSView* root = [[NSView alloc] initWithFrame:frame];
+        root.translatesAutoresizingMaskIntoConstraints = NO;
+        _settingsWindow.contentView = root;
+
+        NSStackView* sidebar = [[NSStackView alloc] initWithFrame:NSZeroRect];
+        sidebar.orientation = NSUserInterfaceLayoutOrientationVertical;
+        sidebar.alignment = NSLayoutAttributeLeading;
+        sidebar.spacing = 6;
+        sidebar.edgeInsets = NSEdgeInsetsMake(20, 16, 20, 16);
+        sidebar.translatesAutoresizingMaskIntoConstraints = NO;
+        [root addSubview:sidebar];
+
+        NSArray<NSString*>* categories = @[@"General", @"Recording", @"Privacy", @"About"];
+        for (NSString* category in categories) {
+            NSButton* button = [self settingsSidebarButton:category category:category];
+            [button.widthAnchor constraintEqualToConstant:140].active = YES;
+            [sidebar addArrangedSubview:button];
+        }
+
+        _settingsContentView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _settingsContentView.translatesAutoresizingMaskIntoConstraints = NO;
+        [root addSubview:_settingsContentView];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [sidebar.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
+            [sidebar.topAnchor constraintEqualToAnchor:root.topAnchor],
+            [sidebar.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
+            [sidebar.widthAnchor constraintEqualToConstant:180],
+            [_settingsContentView.leadingAnchor constraintEqualToAnchor:sidebar.trailingAnchor],
+            [_settingsContentView.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
+            [_settingsContentView.topAnchor constraintEqualToAnchor:root.topAnchor],
+            [_settingsContentView.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
+        ]];
+    }
+
+    [self rebuildSettingsContent];
+    [_settingsWindow center];
+    [_settingsWindow makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)selectSettingsCategory:(NSButton*)sender {
+    NSString* category = sender.identifier;
+    if (!category) return;
+    _settingsCategory = category;
+    for (NSView* view in sender.superview.subviews) {
+        if ([view isKindOfClass:[NSButton class]]) {
+            NSButton* button = (NSButton*)view;
+            button.state = [button.identifier isEqualToString:category]
+                         ? NSControlStateValueOn : NSControlStateValueOff;
+        }
+    }
+    [self rebuildSettingsContent];
+}
+
+- (NSStackView*)freshSettingsStackWithTitle:(NSString*)title {
+    for (NSView* subview in _settingsContentView.subviews) {
+        [subview removeFromSuperview];
+    }
+
+    NSStackView* stack = [[NSStackView alloc] initWithFrame:NSZeroRect];
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeLeading;
+    stack.spacing = 14;
+    stack.edgeInsets = NSEdgeInsetsMake(24, 28, 24, 28);
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [_settingsContentView addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:_settingsContentView.leadingAnchor],
+        [stack.trailingAnchor constraintEqualToAnchor:_settingsContentView.trailingAnchor],
+        [stack.topAnchor constraintEqualToAnchor:_settingsContentView.topAnchor],
+        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:_settingsContentView.bottomAnchor],
+    ]];
+    [stack addArrangedSubview:[self labelWithText:title fontSize:22 bold:YES]];
+    return stack;
+}
+
+- (void)rebuildSettingsContent {
+    if (!_settingsContentView) return;
+
+    if ([_settingsCategory isEqualToString:@"Recording"]) {
+        NSStackView* stack = [self freshSettingsStackWithTitle:@"Recording"];
+
+        NSButton* open = [NSButton buttonWithTitle:@"Open Notes Folder" target:self action:@selector(openNotesFolder:)];
+        NSButton* change = [NSButton buttonWithTitle:@"Change Notes Folder…" target:self action:@selector(changeNotesFolder:)];
+        NSStackView* folderRow = [NSStackView stackViewWithViews:@[open, change]];
+        folderRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        folderRow.spacing = 10;
+        [stack addArrangedSubview:folderRow];
+
+        NSString* sensitivity = [[NSUserDefaults standardUserDefaults] stringForKey:kSensitivityKey];
+        [self addLabel:@"VAD Sensitivity"
+               control:[self popupWithLabels:@[@"Low", @"Medium", @"High"]
+                                       values:@[@"low", @"medium", @"high"]
+                                      current:sensitivity
+                                       action:@selector(selectSensitivityFromPopup:)]
+               toStack:stack];
+
+        NSNumber* silence = @([[NSUserDefaults standardUserDefaults] doubleForKey:kSilenceKey]);
+        [self addLabel:@"Silence Timeout"
+               control:[self popupWithLabels:@[@"2s", @"3s", @"5s", @"8s", @"10s"]
+                                       values:@[@2.0, @3.0, @5.0, @8.0, @10.0]
+                                      current:silence
+                                       action:@selector(selectSilenceTimeoutFromPopup:)]
+               toStack:stack];
+        return;
+    }
+
+    if ([_settingsCategory isEqualToString:@"Privacy"]) {
+        NSStackView* stack = [self freshSettingsStackWithTitle:@"Privacy"];
+        NSButton* toggle = [NSButton checkboxWithTitle:@"Save Last 9 Dictations"
+                                                target:self
+                                                action:@selector(toggleDictationHistory:)];
+        toggle.state = [self dictationHistoryEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
+        [stack addArrangedSubview:toggle];
+        [stack addArrangedSubview:[self labelWithText:@"History is kept only in memory and disappears when the app quits. Dictation injection does not use the clipboard." fontSize:12 bold:NO]];
+
+        NSButton* clear = [NSButton buttonWithTitle:@"Clear Dictation History"
+                                             target:self
+                                             action:@selector(clearDictationHistory:)];
+        clear.enabled = !_dictationHistory.empty();
+        [stack addArrangedSubview:clear];
+        return;
+    }
+
+    if ([_settingsCategory isEqualToString:@"About"]) {
+        NSStackView* stack = [self freshSettingsStackWithTitle:@"About"];
+        NSString* version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+        if (!version) version = @"dev";
+        [stack addArrangedSubview:[self labelWithText:@"note-taker" fontSize:18 bold:YES]];
+        [stack addArrangedSubview:[self labelWithText:[NSString stringWithFormat:@"Version %@", version] fontSize:13 bold:NO]];
+        [stack addArrangedSubview:[self labelWithText:[NSString stringWithFormat:@"Active model: %@", _activeModel] fontSize:13 bold:NO]];
+        [stack addArrangedSubview:[self labelWithText:@"Local speech transcription powered by whisper.cpp." fontSize:13 bold:NO]];
+        [stack addArrangedSubview:[self labelWithText:@"github.com/geovansb/note-taker-cpp" fontSize:13 bold:NO]];
+        return;
+    }
+
+    NSStackView* stack = [self freshSettingsStackWithTitle:@"General"];
+    [self addLabel:@"Language"
+           control:[self popupWithLabels:@[@"Auto", @"Português", @"English", @"Español"]
+                                   values:@[@"auto", @"pt", @"en", @"es"]
+                                  current:_language
+                                   action:@selector(selectLanguageFromPopup:)]
+           toStack:stack];
+
+    [self addLabel:@"Model"
+           control:[self popupWithLabels:@[@"large-v3", @"large-v3-turbo"]
+                                   values:@[@"large-v3", @"large-v3-turbo"]
+                                  current:_model
+                                   action:@selector(selectModelFromPopup:)]
+           toStack:stack];
+
+    [self addLabel:@"Dictation Hotkey"
+           control:[self popupWithLabels:@[[self labelForKeycode:kVK_RightOption],
+                                           [self labelForKeycode:kVK_Option],
+                                           [self labelForKeycode:kVK_RightCommand],
+                                           [self labelForKeycode:kVK_Function]]
+                                   values:@[@(kVK_RightOption), @(kVK_Option), @(kVK_RightCommand), @(kVK_Function)]
+                                  current:@(_hotkeyCode)
+                                   action:@selector(selectHotkeyFromPopup:)]
+           toStack:stack];
 }
 
 // ── Menu actions ──────────────────────────────────────────────────────────────
@@ -601,20 +694,24 @@ static NSString* const kClipboardModeClear      = @"clear";
     if (_controller) _controller->stopSession();
 }
 
-- (void)showAbout:(id)__unused sender {
-    NSString* version = [[NSBundle mainBundle]
-        objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
-    if (!version) version = @"dev";
+- (void)copyRecentDictation:(NSMenuItem*)sender {
+    NSString* text = sender.representedObject;
+    if (!text) return;
+    copyTextToClipboard(std::string([text UTF8String]));
+}
 
-    NSAlert* alert = [[NSAlert alloc] init];
-    alert.messageText = @"note-taker";
-    alert.informativeText = [NSString stringWithFormat:
-        @"Version %@\nModel: %@\n\nLocal speech transcription powered by whisper.cpp.\n"
-        @"github.com/geovansb/note-taker-cpp",
-        version, _activeModel];
-    alert.alertStyle = NSAlertStyleInformational;
-    [alert addButtonWithTitle:@"OK"];
-    [alert runModal];
+- (void)clearDictationHistory:(id)__unused sender {
+    _dictationHistory.clear();
+    [self refreshRecentDictationsMenu];
+    [self rebuildSettingsContent];
+}
+
+- (void)toggleDictationHistory:(NSButton*)sender {
+    BOOL enabled = (sender.state == NSControlStateValueOn);
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kDictationHistoryEnabledKey];
+    if (!enabled) _dictationHistory.clear();
+    [self refreshRecentDictationsMenu];
+    [self rebuildSettingsContent];
 }
 
 - (void)postSessionSavedNotification {
@@ -685,115 +782,47 @@ static NSString* const kClipboardModeClear      = @"clear";
     }
 }
 
-- (void)selectLanguage:(NSMenuItem*)sender {
-    NSString* key = sender.representedObject;
+- (void)selectLanguageFromPopup:(NSPopUpButton*)sender {
+    NSString* key = sender.selectedItem.representedObject;
     if (!key || [key isEqualToString:_language]) return;
 
     _language = key;
     [[NSUserDefaults standardUserDefaults] setObject:key forKey:kLangKey];
-
-    // Apply immediately to the running controller (no restart needed).
     if (_controller) {
-        std::string lang = std::string([key UTF8String]);
-        _controller->setLanguage(lang);
-    }
-
-    for (NSMenuItem* item in sender.menu.itemArray) {
-        item.state = [item.representedObject isEqualToString:key]
-                     ? NSControlStateValueOn : NSControlStateValueOff;
-    }
-
-    // Update parent menu title to show active language
-    NSMenuItem* langParent = [_statusItem.menu itemWithTag:8];
-    if (langParent) {
-        langParent.title = [NSString stringWithFormat:@"Language — %@",
-                            [self labelForLanguage:key]];
+        _controller->setLanguage(std::string([key UTF8String]));
     }
 }
 
-- (void)selectHotkey:(NSMenuItem*)sender {
-    int code = (int)sender.tag;
+- (void)selectHotkeyFromPopup:(NSPopUpButton*)sender {
+    int code = [sender.selectedItem.representedObject intValue];
     if (code == _hotkeyCode) return;
 
     _hotkeyCode = code;
     [[NSUserDefaults standardUserDefaults] setInteger:code forKey:kHotkeyKey];
     _eventTap.setHotkey(code);
 
-    // Update checkmarks
-    for (NSMenuItem* item in sender.menu.itemArray) {
-        item.state = (item.tag == code) ? NSControlStateValueOn : NSControlStateValueOff;
-    }
-
-    // Update the hint text (tag 7)
-    NSMenuItem* hint = [_statusItem.menu itemWithTag:7];
+    NSMenuItem* hint = [_statusItem.menu itemWithTag:kTagHotkeyHint];
     if (hint) {
         hint.title = [NSString stringWithFormat:@"Hold %@ to dictate",
                       [self labelForKeycode:code]];
     }
 }
 
-- (void)selectClipboardKeep:(id)__unused sender {
-    [[NSUserDefaults standardUserDefaults] setObject:kClipboardModeKeep
-                                              forKey:kClipboardCleanupModeKey];
-    [self refreshClipboardMenu];
-}
-
-- (void)selectClipboardClearAfter:(id)__unused sender {
-    NSInteger current = [self clipboardClearDelay];
-
-    NSAlert* alert = [[NSAlert alloc] init];
-    alert.messageText = @"Clear clipboard after";
-    alert.informativeText = @"Enter a whole number of seconds from 1 to 59.";
-    [alert addButtonWithTitle:@"Save"];
-    [alert addButtonWithTitle:@"Cancel"];
-
-    NSTextField* field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 220, 24)];
-    field.stringValue = [NSString stringWithFormat:@"%ld", (long)current];
-
-    NSNumberFormatter* formatter = [[NSNumberFormatter alloc] init];
-    formatter.numberStyle = NSNumberFormatterDecimalStyle;
-    formatter.allowsFloats = NO;
-    formatter.minimum = @1;
-    formatter.maximum = @59;
-    field.formatter = formatter;
-    alert.accessoryView = field;
-
-    if ([alert runModal] != NSAlertFirstButtonReturn) return;
-
-    NSInteger seconds = field.integerValue;
-    if (seconds < 1 || seconds > 59) {
-        NSBeep();
-        return;
-    }
-
-    [[NSUserDefaults standardUserDefaults] setObject:kClipboardModeClear
-                                              forKey:kClipboardCleanupModeKey];
-    [[NSUserDefaults standardUserDefaults] setInteger:seconds
-                                               forKey:kClipboardClearDelayKey];
-    [self refreshClipboardMenu];
-}
-
-- (void)selectModel:(NSMenuItem*)sender {
-    NSString* m = sender.representedObject;
+- (void)selectModelFromPopup:(NSPopUpButton*)sender {
+    NSString* m = sender.selectedItem.representedObject;
     if (!m || [m isEqualToString:_model]) return;
 
-    // Block selection if the model file is not on disk.
     NSString* path = [self modelPathForKey:m];
     if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
         [self showModelMissingAlertForKey:m];
+        [self rebuildSettingsContent];
         return;
     }
 
     _model = m;
     [[NSUserDefaults standardUserDefaults] setObject:m forKey:kModelKey];
+    [self rebuildSettingsContent];
 
-    // Rebuild submenu to show pending restart hint. Title stays as _activeModel.
-    NSMenuItem* modelParent = [_statusItem.menu itemWithTag:6];
-    if (modelParent) {
-        modelParent.submenu = [self buildModelMenu];
-    }
-
-    // Offer to restart now so the new model takes effect immediately.
     NSAlert* alert = [[NSAlert alloc] init];
     alert.messageText = @"Restart required";
     alert.informativeText = [NSString stringWithFormat:
@@ -801,7 +830,6 @@ static NSString* const kClipboardModeClear      = @"clear";
     [alert addButtonWithTitle:@"Restart Now"];
     [alert addButtonWithTitle:@"Later"];
     if ([alert runModal] == NSAlertFirstButtonReturn) {
-        // Re-launch the app bundle, then terminate.
         NSString* bundlePath = [[NSBundle mainBundle] bundlePath];
         [NSTask launchedTaskWithLaunchPath:@"/usr/bin/open"
                                  arguments:@[@"-n", bundlePath]];
@@ -809,24 +837,16 @@ static NSString* const kClipboardModeClear      = @"clear";
     }
 }
 
-- (void)selectSensitivity:(NSMenuItem*)sender {
-    NSString* key = sender.representedObject;
+- (void)selectSensitivityFromPopup:(NSPopUpButton*)sender {
+    NSString* key = sender.selectedItem.representedObject;
     [[NSUserDefaults standardUserDefaults] setObject:key forKey:kSensitivityKey];
     [self applyVadSensitivity:key];
-    for (NSMenuItem* item in sender.menu.itemArray) {
-        item.state = [item.representedObject isEqualToString:key]
-                     ? NSControlStateValueOn : NSControlStateValueOff;
-    }
 }
 
-- (void)selectSilenceTimeout:(NSMenuItem*)sender {
-    float val = [sender.representedObject floatValue];
+- (void)selectSilenceTimeoutFromPopup:(NSPopUpButton*)sender {
+    float val = [sender.selectedItem.representedObject floatValue];
     [[NSUserDefaults standardUserDefaults] setDouble:val forKey:kSilenceKey];
     if (_controller) _controller->setSilenceTimeout(val);
-    for (NSMenuItem* item in sender.menu.itemArray) {
-        item.state = (fabsf([item.representedObject floatValue] - val) < 0.1f)
-                     ? NSControlStateValueOn : NSControlStateValueOff;
-    }
 }
 
 // ── Status updates ────────────────────────────────────────────────────────────

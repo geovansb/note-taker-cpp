@@ -74,9 +74,9 @@ You can switch models from the menu bar at any time. The change takes effect aft
 3. Release the hotkey
 4. The app transcribes your audio and pastes the text at your cursor
 
-The text is injected via a simulated Cmd+V keystroke, so it works in any app — browsers, terminals, text editors, Slack, etc.
+The text is injected with Unicode keyboard events, so normal dictation does not use the system clipboard.
 
-Dictation uses the system clipboard temporarily to paste the transcribed text. The app does not read or preserve the previous clipboard contents. By default, it clears its own temporary clipboard item after 1 second; from the menu bar, choose **Clipboard — Keep** or **Clipboard — Clear after X seconds** to keep the transcribed text or clear it after a configurable delay from 1 to 59 seconds. Clipboard clearing only runs when the app's private marker is still present, so content copied afterward is not removed.
+If **Save Last 9 Dictations** is enabled in **Settings → Privacy**, the app keeps recent dictations in memory until it quits. Use **Recent Dictations** in the menu bar to copy a previous dictation to the clipboard explicitly.
 
 Minimum recording length is 0.5 seconds to filter out accidental key taps.
 
@@ -99,15 +99,27 @@ Files are written atomically (via temp file + rename) after every chunk, so even
 
 ## Settings
 
-All settings are accessible from the menu bar icon and persist across restarts.
+Click **Settings…** from the menu bar icon to open a preferences window with General, Recording, Privacy, and About sections. Settings persist across restarts unless noted otherwise.
 
-### Language
+### General
+
+#### Language
 
 Choose the transcription language or leave it on **Auto** for automatic detection. Changing the language takes effect immediately — no restart needed.
 
 Available: Auto, Português, English, Español.
 
-### VAD Sensitivity
+#### Dictation Hotkey
+
+Choose which key triggers dictation: Right Option (default), Left Option, Right Command, or Fn.
+
+#### Model
+
+Shows the currently loaded model. Select a different one to queue it for the next restart. If a model isn't downloaded yet, the app will show download instructions.
+
+### Recording
+
+#### VAD Sensitivity
 
 Controls how easily the app detects speech during session recording. This setting does **not** affect dictation mode (which records everything while the hotkey is held).
 
@@ -119,7 +131,7 @@ Controls how easily the app detects speech during session recording. This settin
 
 Technically, this adjusts two parameters: the RMS energy threshold and the input gain applied before VAD analysis. Higher sensitivity = lower threshold + higher gain.
 
-### Silence Timeout
+#### Silence Timeout
 
 How many seconds of silence the app waits before ending a speech chunk during session recording. Only affects session recording, not dictation.
 
@@ -132,17 +144,13 @@ How many seconds of silence the app waits before ending a speech chunk during se
 
 Shorter timeouts mean chunks are sent to Whisper sooner (lower latency for the transcript to appear), but may split sentences mid-thought. Longer timeouts produce more coherent segments but delay output.
 
-### Dictation Hotkey
+### Privacy
 
-Choose which key triggers dictation: Right Option (default), Left Option, Right Command, or Fn.
+**Save Last 9 Dictations** is off by default. When enabled, it keeps recent dictation texts only in app memory and exposes them through **Recent Dictations** in the menu bar. Clicking an item copies the full text to the clipboard. Recording sessions are not added to this history because they are already saved as files.
 
-### Dictation Clipboard
+### About
 
-Dictation pastes text through the system clipboard for app compatibility. Choose **Keep** to leave the transcribed text in the clipboard, or **Clear after X seconds** to clear the app's temporary clipboard item after a delay from 1 to 59 seconds.
-
-### Model
-
-Shows the currently loaded model. Select a different one to queue it for the next restart. If a model isn't downloaded yet, the app will show download instructions.
+Shows app version, active model, and local transcription information.
 
 ---
 
