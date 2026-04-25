@@ -702,8 +702,15 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
         [stack addArrangedSubview:toggle];
 
         NSTextField* privacyNote = [self labelWithText:@"History is kept only in memory and disappears when the app quits. Dictation injection does not use the clipboard." fontSize:12 bold:NO];
-        [privacyNote.widthAnchor constraintLessThanOrEqualToConstant:560].active = YES;
-        [stack addArrangedSubview:privacyNote];
+        [privacyNote.widthAnchor constraintLessThanOrEqualToConstant:520].active = YES;
+        NSView* checkboxOffset = [[NSView alloc] initWithFrame:NSZeroRect];
+        checkboxOffset.translatesAutoresizingMaskIntoConstraints = NO;
+        [checkboxOffset.widthAnchor constraintEqualToConstant:44].active = YES;
+        NSStackView* privacyNoteRow = [NSStackView stackViewWithViews:@[checkboxOffset, privacyNote]];
+        privacyNoteRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        privacyNoteRow.alignment = NSLayoutAttributeTop;
+        privacyNoteRow.spacing = 0;
+        [stack addArrangedSubview:privacyNoteRow];
 
         NSButton* clear = [NSButton buttonWithTitle:@"Clear Dictation History"
                                              target:self
