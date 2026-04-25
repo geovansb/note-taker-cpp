@@ -20,6 +20,7 @@ static constexpr NSInteger kTagStartRecording     = 2;
 static constexpr NSInteger kTagStopRecording      = 3;
 static constexpr NSInteger kTagHotkeyHint         = 7;
 static constexpr NSInteger kTagRecentDictations   = 10;
+static constexpr CGFloat   kSettingsRightPadding  = 36.0;
 
 @implementation AppDelegate {
     NSStatusItem*  _statusItem;
@@ -474,6 +475,7 @@ static constexpr NSInteger kTagRecentDictations   = 10;
     label.font = bold ? [NSFont boldSystemFontOfSize:fontSize] : [NSFont systemFontOfSize:fontSize];
     label.lineBreakMode = NSLineBreakByWordWrapping;
     label.maximumNumberOfLines = 0;
+    label.translatesAutoresizingMaskIntoConstraints = NO;
     return label;
 }
 
@@ -598,7 +600,8 @@ static constexpr NSInteger kTagRecentDictations   = 10;
     [_settingsContentView addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[
         [stack.leadingAnchor constraintEqualToAnchor:_settingsContentView.leadingAnchor],
-        [stack.trailingAnchor constraintEqualToAnchor:_settingsContentView.trailingAnchor],
+        [stack.trailingAnchor constraintLessThanOrEqualToAnchor:_settingsContentView.trailingAnchor
+                                                       constant:-kSettingsRightPadding],
         [stack.topAnchor constraintEqualToAnchor:_settingsContentView.topAnchor],
         [stack.bottomAnchor constraintLessThanOrEqualToAnchor:_settingsContentView.bottomAnchor],
     ]];
@@ -665,7 +668,10 @@ static constexpr NSInteger kTagRecentDictations   = 10;
                                                 action:@selector(toggleDictationHistory:)];
         toggle.state = [self dictationHistoryEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
         [stack addArrangedSubview:toggle];
-        [stack addArrangedSubview:[self labelWithText:@"History is kept only in memory and disappears when the app quits. Dictation injection does not use the clipboard." fontSize:12 bold:NO]];
+
+        NSTextField* privacyNote = [self labelWithText:@"History is kept only in memory and disappears when the app quits. Dictation injection does not use the clipboard." fontSize:12 bold:NO];
+        [privacyNote.widthAnchor constraintLessThanOrEqualToConstant:560].active = YES;
+        [stack addArrangedSubview:privacyNote];
 
         NSButton* clear = [NSButton buttonWithTitle:@"Clear Dictation History"
                                              target:self
