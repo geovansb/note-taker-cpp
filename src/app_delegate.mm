@@ -12,6 +12,10 @@ static NSString* const kHotkeyKey    = @"hotkey_keycode";
 static NSString* const kSensitivityKey = @"vad_sensitivity";
 static NSString* const kSilenceKey     = @"silence_timeout";
 static NSString* const kOutputDirKey   = @"output_dir";
+static NSString* const kClipboardCleanupModeKey = @"clipboard_cleanup_mode";
+static NSString* const kClipboardClearDelayKey  = @"clipboard_clear_delay";
+static NSString* const kClipboardModeKeep       = @"keep";
+static NSString* const kClipboardModeClear      = @"clear";
 
 @implementation AppDelegate {
     NSStatusItem*  _statusItem;
@@ -41,6 +45,8 @@ static NSString* const kOutputDirKey   = @"output_dir";
         kSensitivityKey: @"medium",
         kSilenceKey:     @5.0,
         kOutputDirKey:   defaultNotesDir,
+        kClipboardCleanupModeKey: kClipboardModeClear,
+        kClipboardClearDelayKey:  @1,
     }];
     _language     = [[NSUserDefaults standardUserDefaults] stringForKey:kLangKey];
     _model        = [[NSUserDefaults standardUserDefaults] stringForKey:kModelKey];
@@ -243,10 +249,12 @@ static NSString* const kOutputDirKey   = @"output_dir";
         });
     });
 
-    _controller->setOnDictationResult([](std::string text) {
+    _controller->setOnDictationResult([weakSelf](std::string text) {
         // Inject text at cursor. Must run on main thread (CGEventPost requirement).
         dispatch_async(dispatch_get_main_queue(), ^{
-            injectText(text);
+            AppDelegate* d = weakSelf;
+            if (!d) return;
+            injectText(text, [d clipboardClearDelaySecondsForInjection]);
         });
     });
 
@@ -364,6 +372,12 @@ static NSString* const kOutputDirKey   = @"output_dir";
     hotkeyParent.submenu = [self buildHotkeyMenu];
     [menu addItem:hotkeyParent];
 
+    NSMenuItem* clipboardParent = [[NSMenuItem alloc] initWithTitle:[self clipboardMenuTitle]
+                                    action:nil keyEquivalent:@""];
+    clipboardParent.tag     = 9;
+    clipboardParent.submenu = [self buildClipboardMenu];
+    [menu addItem:clipboardParent];
+
     [menu addItem:[NSMenuItem separatorItem]];
 
     [menu addItemWithTitle:@"About note-taker"
@@ -450,6 +464,54 @@ static NSString* const kOutputDirKey   = @"output_dir";
         item.state = (code == _hotkeyCode) ? NSControlStateValueOn : NSControlStateValueOff;
         [sub addItem:item];
     }
+    return sub;
+}
+
+- (NSInteger)clipboardClearDelay {
+    NSInteger seconds = [[NSUserDefaults standardUserDefaults] integerForKey:kClipboardClearDelayKey];
+    if (seconds < 1) return 1;
+    if (seconds > 59) return 59;
+    return seconds;
+}
+
+- (BOOL)clipboardShouldClear {
+    NSString* mode = [[NSUserDefaults standardUserDefaults] stringForKey:kClipboardCleanupModeKey];
+    return ![mode isEqualToString:kClipboardModeKeep];
+}
+
+- (int)clipboardClearDelaySecondsForInjection {
+    return [self clipboardShouldClear] ? (int)[self clipboardClearDelay] : 0;
+}
+
+- (NSString*)clipboardMenuTitle {
+    if (![self clipboardShouldClear]) return @"Clipboard — Keep";
+    return [NSString stringWithFormat:@"Clipboard — Clear after %ld seconds",
+                                      (long)[self clipboardClearDelay]];
+}
+
+- (void)refreshClipboardMenu {
+    NSMenuItem* parent = [_statusItem.menu itemWithTag:9];
+    if (!parent) return;
+    parent.title = [self clipboardMenuTitle];
+    parent.submenu = [self buildClipboardMenu];
+}
+
+- (NSMenu*)buildClipboardMenu {
+    NSMenu* sub = [[NSMenu alloc] initWithTitle:@"Clipboard"];
+    BOOL shouldClear = [self clipboardShouldClear];
+    NSInteger delay = [self clipboardClearDelay];
+
+    NSMenuItem* keep = [[NSMenuItem alloc] initWithTitle:@"Keep"
+                         action:@selector(selectClipboardKeep:) keyEquivalent:@""];
+    keep.state = shouldClear ? NSControlStateValueOff : NSControlStateValueOn;
+    [sub addItem:keep];
+
+    NSMenuItem* clear = [[NSMenuItem alloc] initWithTitle:
+        [NSString stringWithFormat:@"Clear after %ld seconds…", (long)delay]
+                            action:@selector(selectClipboardClearAfter:) keyEquivalent:@""];
+    clear.state = shouldClear ? NSControlStateValueOn : NSControlStateValueOff;
+    [sub addItem:clear];
+
     return sub;
 }
 
@@ -668,6 +730,47 @@ static NSString* const kOutputDirKey   = @"output_dir";
         hint.title = [NSString stringWithFormat:@"Hold %@ to dictate",
                       [self labelForKeycode:code]];
     }
+}
+
+- (void)selectClipboardKeep:(id)__unused sender {
+    [[NSUserDefaults standardUserDefaults] setObject:kClipboardModeKeep
+                                              forKey:kClipboardCleanupModeKey];
+    [self refreshClipboardMenu];
+}
+
+- (void)selectClipboardClearAfter:(id)__unused sender {
+    NSInteger current = [self clipboardClearDelay];
+
+    NSAlert* alert = [[NSAlert alloc] init];
+    alert.messageText = @"Clear clipboard after";
+    alert.informativeText = @"Enter a whole number of seconds from 1 to 59.";
+    [alert addButtonWithTitle:@"Save"];
+    [alert addButtonWithTitle:@"Cancel"];
+
+    NSTextField* field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 220, 24)];
+    field.stringValue = [NSString stringWithFormat:@"%ld", (long)current];
+
+    NSNumberFormatter* formatter = [[NSNumberFormatter alloc] init];
+    formatter.numberStyle = NSNumberFormatterDecimalStyle;
+    formatter.allowsFloats = NO;
+    formatter.minimum = @1;
+    formatter.maximum = @59;
+    field.formatter = formatter;
+    alert.accessoryView = field;
+
+    if ([alert runModal] != NSAlertFirstButtonReturn) return;
+
+    NSInteger seconds = field.integerValue;
+    if (seconds < 1 || seconds > 59) {
+        NSBeep();
+        return;
+    }
+
+    [[NSUserDefaults standardUserDefaults] setObject:kClipboardModeClear
+                                              forKey:kClipboardCleanupModeKey];
+    [[NSUserDefaults standardUserDefaults] setInteger:seconds
+                                               forKey:kClipboardClearDelayKey];
+    [self refreshClipboardMenu];
 }
 
 - (void)selectModel:(NSMenuItem*)sender {

@@ -74,7 +74,9 @@ You can switch models from the menu bar at any time. The change takes effect aft
 3. Release the hotkey
 4. The app transcribes your audio and pastes the text at your cursor
 
-The text is injected via a simulated Cmd+V keystroke, so it works in any app — browsers, terminals, text editors, Slack, etc. Your clipboard is saved before injection and restored afterward.
+The text is injected via a simulated Cmd+V keystroke, so it works in any app — browsers, terminals, text editors, Slack, etc.
+
+Dictation uses the system clipboard temporarily to paste the transcribed text. The app does not read or preserve the previous clipboard contents. By default, it clears its own temporary clipboard item after 1 second; from the menu bar, choose **Clipboard — Keep** or **Clipboard — Clear after X seconds** to keep the transcribed text or clear it after a configurable delay from 1 to 59 seconds. Clipboard clearing only runs when the app's private marker is still present, so content copied afterward is not removed.
 
 Minimum recording length is 0.5 seconds to filter out accidental key taps.
 
@@ -133,6 +135,10 @@ Shorter timeouts mean chunks are sent to Whisper sooner (lower latency for the t
 ### Dictation Hotkey
 
 Choose which key triggers dictation: Right Option (default), Left Option, Right Command, or Fn.
+
+### Dictation Clipboard
+
+Dictation pastes text through the system clipboard for app compatibility. Choose **Keep** to leave the transcribed text in the clipboard, or **Clear after X seconds** to clear the app's temporary clipboard item after a delay from 1 to 59 seconds.
 
 ### Model
 
