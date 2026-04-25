@@ -18,6 +18,12 @@ cmake --build build --parallel
 Binary is portable across all Apple Silicon Macs by default (`-march=native` is off).
 See `docs/DISTRIBUTION.md` for how to deploy to other machines.
 
+## Release versioning
+
+The app bundle version is generated from the latest Git tag at CMake configure time. Tags must use the `vX.Y.Z` format; a build made from tag `v4.1.2` embeds `4.1.2` into `CFBundleShortVersionString` and `CFBundleVersion`.
+
+For releases, create/check out the release tag first, then run CMake/build from that checkout so the app About screen, bundle metadata, and GitHub release tag match.
+
 ## Tests
 
 Each module has its own standalone test binary — no test framework, plain assertions.
