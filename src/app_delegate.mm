@@ -612,11 +612,32 @@ static constexpr NSInteger kTagRecentDictations   = 10;
     if ([_settingsCategory isEqualToString:@"Recording"]) {
         NSStackView* stack = [self freshSettingsStackWithTitle:@"Recording"];
 
-        NSButton* open = [NSButton buttonWithTitle:@"Open Notes Folder" target:self action:@selector(openNotesFolder:)];
-        NSButton* change = [NSButton buttonWithTitle:@"Change Notes Folder…" target:self action:@selector(changeNotesFolder:)];
-        NSStackView* folderRow = [NSStackView stackViewWithViews:@[open, change]];
+        NSString* folderPath = [NSString stringWithUTF8String:_outputDir.c_str()];
+        NSTextField* folderField = [NSTextField textFieldWithString:folderPath ?: @""];
+        folderField.editable = NO;
+        folderField.selectable = YES;
+        folderField.lineBreakMode = NSLineBreakByTruncatingMiddle;
+        folderField.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSButton* change = [NSButton buttonWithTitle:@"Change…" target:self action:@selector(changeNotesFolder:)];
+        change.translatesAutoresizingMaskIntoConstraints = NO;
+        NSStackView* folderControls = [NSStackView stackViewWithViews:@[folderField, change]];
+        folderControls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        folderControls.alignment = NSLayoutAttributeCenterY;
+        folderControls.spacing = 8;
+        folderControls.translatesAutoresizingMaskIntoConstraints = NO;
+        [folderField.widthAnchor constraintEqualToConstant:330].active = YES;
+
+        NSStackView* folderRow = [NSStackView stackViewWithViews:@[
+            [self labelWithText:@"Notes Folder" fontSize:13 bold:NO],
+            folderControls
+        ]];
         folderRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-        folderRow.spacing = 10;
+        folderRow.alignment = NSLayoutAttributeCenterY;
+        folderRow.spacing = 16;
+        folderRow.translatesAutoresizingMaskIntoConstraints = NO;
+        folderRow.views[0].translatesAutoresizingMaskIntoConstraints = NO;
+        [folderRow.views[0].widthAnchor constraintEqualToConstant:130].active = YES;
         [stack addArrangedSubview:folderRow];
 
         NSString* sensitivity = [[NSUserDefaults standardUserDefaults] stringForKey:kSensitivityKey];
