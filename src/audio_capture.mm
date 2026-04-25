@@ -1,5 +1,6 @@
 #import <AVFoundation/AVFoundation.h>
 #import <Foundation/Foundation.h>
+#include "app_logger.h"
 #include "audio_capture.h"
 #include "constants.h"
 #include <cstdio>
@@ -41,13 +42,13 @@ struct AudioCapture::Impl {
         [engine prepare];
 
         AVAudioFormat* hwFormat = [inputNode outputFormatForBus:0];
-        fprintf(stderr, "info: hardware format %.0f Hz, %u ch\n",
-                hwFormat.sampleRate, (unsigned)hwFormat.channelCount);
+        NT_LOG_DEBUG("audio", "hardware format %.0f Hz, %u ch",
+                     hwFormat.sampleRate, (unsigned)hwFormat.channelCount);
 
         // Reject invalid formats that appear transiently during device changes
         // (e.g. Bluetooth disconnect → 0 Hz / 0 channels).
         if (hwFormat.sampleRate < 1.0 || hwFormat.channelCount == 0) {
-            fprintf(stderr, "warn: invalid hardware format — device not ready\n");
+            NT_LOG_WARN("audio", "invalid hardware format; device not ready");
             last_start_error = AudioStartError::InvalidDeviceFormat;
             return false;
         }
@@ -60,10 +61,9 @@ struct AudioCapture::Impl {
 
         converter = [[AVAudioConverter alloc] initFromFormat:hwFormat toFormat:targetFormat];
         if (!converter) {
-            fprintf(stderr, "error: could not create AVAudioConverter "
-                            "(%.0fHz %uch → %dHz 1ch)\n",
-                    hwFormat.sampleRate, (unsigned)hwFormat.channelCount,
-                    CAPTURE_SAMPLE_RATE);
+            NT_LOG_ERROR("audio", "could not create AVAudioConverter %.0fHz %uch -> %dHz 1ch",
+                         hwFormat.sampleRate, (unsigned)hwFormat.channelCount,
+                         CAPTURE_SAMPLE_RATE);
             last_start_error = AudioStartError::ConverterFailed;
             return false;
         }
@@ -109,8 +109,8 @@ struct AudioCapture::Impl {
                 }
             }];
         } @catch (NSException* ex) {
-            fprintf(stderr, "warn: installTapOnBus threw: %s — %s\n",
-                    ex.name.UTF8String, ex.reason.UTF8String);
+            NT_LOG_WARN("audio", "installTapOnBus threw: %s - %s",
+                        ex.name.UTF8String, ex.reason.UTF8String);
             last_start_error = AudioStartError::TapInstallFailed;
             return false;
         }
@@ -147,8 +147,7 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
     }
 
     if (!impl_->permission_granted) {
-        fprintf(stderr, "error: microphone permission denied — "
-                        "enable in System Settings > Privacy > Microphone\n");
+        NT_LOG_ERROR("audio", "microphone permission denied; enable in System Settings > Privacy > Microphone");
         impl_->last_start_error = AudioStartError::PermissionDenied;
         return false;
     }
@@ -178,7 +177,7 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
                     object:impl_->engine
                      queue:nil
                 usingBlock:^(NSNotification*) {
-        fprintf(stderr, "warn: audio configuration changed — reconfiguring…\n");
+        NT_LOG_WARN("audio", "audio configuration changed; reconfiguring");
         // Remove old tap before reinstalling with the new format.
         [p->engine.inputNode removeTapOnBus:0];
         p->converter = nil;
@@ -191,8 +190,8 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
 
         for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
             if (attempt > 0) {
-                fprintf(stderr, "info: retry %d/%d after %.0fms…\n",
-                        attempt + 1, kMaxRetries, kBackoffMs[attempt]);
+                NT_LOG_INFO("audio", "retry %d/%d after %.0fms",
+                            attempt + 1, kMaxRetries, kBackoffMs[attempt]);
                 [NSThread sleepForTimeInterval:kBackoffMs[attempt] / 1000.0];
                 // Re-prepare engine so it picks up the new device.
                 [p->engine.inputNode removeTapOnBus:0];
@@ -201,28 +200,27 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
             }
 
             if (!p->installTap()) {
-                fprintf(stderr, "warn: installTap failed (attempt %d/%d)\n",
-                        attempt + 1, kMaxRetries);
+                NT_LOG_WARN("audio", "installTap failed attempt=%d/%d",
+                            attempt + 1, kMaxRetries);
                 continue;
             }
 
             NSError* restartErr = nil;
             [p->engine startAndReturnError:&restartErr];
             if (restartErr) {
-                fprintf(stderr, "warn: engine restart failed (attempt %d/%d): %s\n",
-                        attempt + 1, kMaxRetries,
-                        restartErr.localizedDescription.UTF8String);
+                NT_LOG_WARN("audio", "engine restart failed attempt=%d/%d: %s",
+                            attempt + 1, kMaxRetries,
+                            restartErr.localizedDescription.UTF8String);
                 continue;
             }
 
             recovered = true;
-            fprintf(stderr, "info: audio capture resumed after config change\n");
+            NT_LOG_INFO("audio", "audio capture resumed after config change");
             break;
         }
 
         if (!recovered) {
-            fprintf(stderr, "error: audio recovery failed after %d attempts — "
-                            "restart required\n", kMaxRetries);
+            NT_LOG_ERROR("audio", "audio recovery failed after %d attempts; restart required", kMaxRetries);
             if (p->on_recovery_failed) p->on_recovery_failed();
         }
         if (p->on_config_change) p->on_config_change();
@@ -231,8 +229,8 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
     NSError* err = nil;
     [impl_->engine startAndReturnError:&err];
     if (err) {
-        fprintf(stderr, "error: AVAudioEngine failed to start: %s\n",
-                err.localizedDescription.UTF8String);
+        NT_LOG_ERROR("audio", "AVAudioEngine failed to start: %s",
+                     err.localizedDescription.UTF8String);
         impl_->last_start_error = AudioStartError::EngineStartFailed;
         impl_->resetEngineState();
         return false;

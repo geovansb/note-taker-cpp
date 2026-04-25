@@ -29,8 +29,8 @@ using TranscribeFunc = std::function<TranscribeResult(
 // ── WhisperWorker ─────────────────────────────────────────────────────────────
 
 // Owns a dedicated worker thread that dequeues audio chunks and transcribes
-// them via an injected TranscribeFunc. Results go to stdout and, optionally,
-// to an OutputWriter for persistent JSON/TXT output.
+// them via an injected TranscribeFunc. Results go to the dictation callback and,
+// optionally, to an OutputWriter for persistent JSON/TXT output.
 // Thread-safe: enqueue() may be called from any thread.
 class WhisperWorker {
 public:

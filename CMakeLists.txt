@@ -43,6 +43,7 @@ configure_file(
 
 add_executable(note-taker-bar MACOSX_BUNDLE
     src/bar_main.mm
+    src/app_logger.mm
     src/app_delegate.mm
     src/app_controller.cpp
     src/event_tap.mm
@@ -122,18 +123,21 @@ target_include_directories(chunk_assembler_test PRIVATE src)
 
 add_executable(wav_writer_test
     tests/wav_writer_test.cpp
+    src/app_logger.mm
     src/wav_writer.cpp
 )
 target_include_directories(wav_writer_test PRIVATE src)
 
 add_executable(output_writer_test
     tests/output_writer_test.cpp
+    src/app_logger.mm
     src/output_writer.cpp
 )
 target_include_directories(output_writer_test PRIVATE src third_party)
 
 add_executable(whisper_worker_test
     tests/whisper_worker_test.cpp
+    src/app_logger.mm
     src/whisper_worker.cpp
     src/output_writer.cpp
     src/wav_writer.cpp

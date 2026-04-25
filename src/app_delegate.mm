@@ -1,4 +1,5 @@
 #import "app_delegate.h"
+#include "app_logger.h"
 #include "app_controller.h"
 #include "app_status.h"
 #include "dictation_history.h"
@@ -14,6 +15,7 @@ static NSString* const kSensitivityKey = @"vad_sensitivity";
 static NSString* const kSilenceKey     = @"silence_timeout";
 static NSString* const kOutputDirKey   = @"output_dir";
 static NSString* const kDictationHistoryEnabledKey = @"dictation_history_enabled";
+static NSString* const kLogLevelKey    = @"log_level";
 
 static constexpr NSInteger kTagStatus             = 1;
 static constexpr NSInteger kTagStartRecording     = 2;
@@ -35,6 +37,7 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
     NSString*      _model;        // selected for next restart
     NSString*      _activeModel;  // currently loaded
     NSString*      _settingsCategory;
+    NSString*      _logLevel;
     int            _hotkeyCode;
     BOOL           _wasFinalizing; // track session finalize → idle transition
 }
@@ -55,12 +58,15 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
         kSilenceKey:     @5.0,
         kOutputDirKey:   defaultNotesDir,
         kDictationHistoryEnabledKey: @NO,
+        kLogLevelKey:    @"warn",
     }];
     _language     = [[NSUserDefaults standardUserDefaults] stringForKey:kLangKey];
     _model        = [[NSUserDefaults standardUserDefaults] stringForKey:kModelKey];
     _activeModel  = _model;  // loaded model = selected at launch
     _settingsCategory = @"General";
+    _logLevel     = [[NSUserDefaults standardUserDefaults] stringForKey:kLogLevelKey];
     _hotkeyCode   = (int)[[NSUserDefaults standardUserDefaults] integerForKey:kHotkeyKey];
+    AppLogger::setLevel(AppLogger::parseLevel(std::string([_logLevel UTF8String])));
 
     // Monitor sleep/wake to handle audio interruption gracefully.
     __weak AppDelegate* weakSelfForSleep = self;
@@ -70,7 +76,7 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
                 usingBlock:^(NSNotification*) {
         AppDelegate* d = weakSelfForSleep;
         if (!d) return;
-        NSLog(@"[note-taker] System will sleep — audio capture paused");
+        NT_LOG_WARN("app", "system will sleep; audio capture paused");
     }];
     [[[NSWorkspace sharedWorkspace] notificationCenter]
         addObserverForName:NSWorkspaceDidWakeNotification
@@ -78,7 +84,7 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
                 usingBlock:^(NSNotification*) {
         AppDelegate* d = weakSelfForSleep;
         if (!d || !d->_controller) return;
-        NSLog(@"[note-taker] System woke — audio capture resumed");
+        NT_LOG_WARN("app", "system woke; audio capture resumed");
         dispatch_async(dispatch_get_main_queue(), ^{
             AppDelegate* d2 = weakSelfForSleep;
             if (d2) [d2 setStatusTitle:@"⚠ Audio resumed after sleep"];  // local UI-only, not from controller
@@ -105,6 +111,7 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
         delete _controller;
         _controller = nullptr;
     }
+    NT_LOG_WARN("app", "application will terminate");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -181,7 +188,7 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
     if (tap_ok && _accessibilityRetryTimer) {
         [_accessibilityRetryTimer invalidate];
         _accessibilityRetryTimer = nil;
-        NSLog(@"[note-taker] EventTap started");
+        NT_LOG_WARN("event_tap", "event tap started");
     }
     return tap_ok;
 }
@@ -216,6 +223,10 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
     std::string modelPath = std::string([modelNS UTF8String]);
     std::string language  = std::string([_language UTF8String]);
     _outputDir            = std::string([notesNS UTF8String]);
+    AppLogger::setNotesDir(_outputDir);
+    NT_LOG_WARN("app", "startup config model=%s notes_dir=%s language=%s log_path=%s",
+                modelPath.c_str(), _outputDir.c_str(), language.c_str(),
+                AppLogger::path().c_str());
 
     __weak AppDelegate* weakSelf = self;
 
@@ -227,6 +238,11 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
         // Called from any thread — dispatch UI updates to main queue.
         AppStatus st = event.status;
         std::string detail = std::move(event.detail);
+        if (detail.empty()) {
+            NT_LOG_INFO("status", "%s", statusLabel(st).c_str());
+        } else {
+            NT_LOG_WARN("status", "%s - %s", statusLabel(st).c_str(), detail.c_str());
+        }
         dispatch_async(dispatch_get_main_queue(), ^{
             AppDelegate* d = weakSelf;
             if (!d) return;
@@ -282,7 +298,7 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
     // every app start. A retry timer will start the tap as soon as permission
     // is granted, without requiring a relaunch.
     if (![self attemptStartEventTapWithPrompt:NO]) {
-        NSLog(@"[note-taker] EventTap not started — Accessibility not granted");
+        NT_LOG_WARN("event_tap", "event tap not started; Accessibility not granted");
         [self showAccessibilityDeniedAlert];
         [self scheduleAccessibilityRetry];
     }
@@ -317,8 +333,7 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
             released = (!w || w.frame.origin.y < -100);
         }
         if (released) {
-            NSLog(@"[note-taker] Menu bar icon removed by macOS — "
-                  "go to System Settings -> Menu Bar and enable note-taker-bar");
+            NT_LOG_WARN("app", "menu bar icon removed by macOS; enable note-taker-bar in System Settings > Menu Bar");
             s->_statusItem = nil;
         }
     });
@@ -362,6 +377,11 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
                               action:@selector(openNotesFolder:) keyEquivalent:@"o"];
     openFolder.keyEquivalentModifierMask = NSEventModifierFlagCommand;
     [menu addItem:openFolder];
+
+    NSMenuItem* openLogs = [[NSMenuItem alloc] initWithTitle:@"Open Logs Folder"
+                              action:@selector(openLogsFolder:) keyEquivalent:@"l"];
+    openLogs.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+    [menu addItem:openLogs];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -755,6 +775,13 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
                                    action:@selector(selectModelFromPopup:)]
            toStack:stack];
 
+    [self addLabel:@"Log Level"
+           control:[self popupWithLabels:@[@"DEBUG", @"INFO", @"WARN", @"ERROR"]
+                                   values:@[@"debug", @"info", @"warn", @"error"]
+                                  current:_logLevel
+                                   action:@selector(selectLogLevelFromPopup:)]
+           toStack:stack];
+
     [self addLabel:@"Dictation Hotkey"
            control:[self popupWithLabels:@[[self labelForKeycode:kVK_RightOption],
                                            [self labelForKeycode:kVK_Option],
@@ -841,6 +868,23 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
     [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:dir]];
 }
 
+- (void)openLogsFolder:(id)__unused sender {
+    std::string logsDir = AppLogger::logsDir();
+    if (logsDir.empty()) {
+        AppLogger::setNotesDir(_outputDir);
+        logsDir = AppLogger::logsDir();
+    }
+    NSString* dir = [NSString stringWithUTF8String:logsDir.c_str()];
+    if (!dir) return;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:dir]) {
+        [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:nil];
+    }
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:dir]];
+}
+
 - (void)changeNotesFolder:(id)__unused sender {
     NSOpenPanel* panel = [NSOpenPanel openPanel];
     panel.canChooseFiles          = NO;
@@ -867,6 +911,9 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
 
         _outputDir = std::string([path UTF8String]);
         [[NSUserDefaults standardUserDefaults] setObject:path forKey:kOutputDirKey];
+        AppLogger::setNotesDir(_outputDir);
+        NT_LOG_WARN("app", "notes folder changed notes_dir=%s log_path=%s",
+                    _outputDir.c_str(), AppLogger::path().c_str());
         if (_controller) _controller->setOutputDir(_outputDir);
     }
 }
@@ -910,6 +957,7 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
 
     _model = m;
     [[NSUserDefaults standardUserDefaults] setObject:m forKey:kModelKey];
+    NT_LOG_WARN("app", "model preference changed model=%s restart_required=true", [m UTF8String]);
     [self rebuildSettingsContent];
 
     NSAlert* alert = [[NSAlert alloc] init];
@@ -924,6 +972,17 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
                                  arguments:@[@"-n", bundlePath]];
         [NSApp terminate:nil];
     }
+}
+
+- (void)selectLogLevelFromPopup:(NSPopUpButton*)sender {
+    NSString* value = sender.selectedItem.representedObject;
+    if (!value) return;
+
+    LogLevel level = AppLogger::parseLevel(std::string([value UTF8String]));
+    std::string normalized = AppLogger::normalizedLevelValue(level);
+    _logLevel = [NSString stringWithUTF8String:normalized.c_str()];
+    [[NSUserDefaults standardUserDefaults] setObject:_logLevel forKey:kLogLevelKey];
+    AppLogger::setLevel(level);
 }
 
 - (void)selectSensitivityFromPopup:(NSPopUpButton*)sender {

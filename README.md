@@ -117,6 +117,10 @@ Choose which key triggers dictation: Right Option (default), Left Option, Right 
 
 Shows the currently loaded model. Select a different one to queue it for the next restart. If a model isn't downloaded yet, the app will show download instructions.
 
+#### Log Level
+
+Choose how much diagnostic information is written to the app log. Available levels are **DEBUG**, **INFO**, **WARN** (default), and **ERROR**. Changes take effect immediately.
+
 ### Recording
 
 #### VAD Sensitivity
@@ -161,6 +165,7 @@ Shows app version, active model, and local transcription information.
 | Cmd+R | Start Recording |
 | Shift+Cmd+R | Stop Recording |
 | Cmd+O | Open Notes Folder |
+| Cmd+L | Open Logs Folder |
 | Cmd+Q | Quit |
 
 ---
@@ -187,6 +192,15 @@ Key design decisions:
 ---
 
 ## Troubleshooting
+
+**Where are logs written?**
+Logs are stored inside the configured Notes Folder, under `logs/note-taker-bar.log`. Use **Open Logs Folder** from the menu bar app, or run:
+
+```sh
+tail -f ~/notes/logs/note-taker-bar.log
+```
+
+If you changed the Notes Folder in Settings, use that folder instead of `~/notes`.
 
 **"Accessibility permission required" on every rebuild**
 After rebuilding, the ad-hoc code signature changes, which invalidates the macOS TCC permission cache. The `build.sh` script runs `tccutil reset` automatically, but you'll need to re-grant Accessibility permission in System Settings. This only happens during development.

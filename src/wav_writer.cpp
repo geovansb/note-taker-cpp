@@ -1,4 +1,5 @@
 #include "wav_writer.h"
+#include "app_logger.h"
 #include <algorithm>
 #include <cerrno>
 #include <cstdint>
@@ -27,8 +28,8 @@ void writeWav(const std::string& path,
               int                sample_rate) {
     FILE* f = fopen(path.c_str(), "wb");
     if (!f) {
-        fprintf(stderr, "warn: writeWav: cannot open %s: %s\n",
-                path.c_str(), strerror(errno));
+        NT_LOG_WARN("wav", "writeWav cannot open %s: %s",
+                    path.c_str(), strerror(errno));
         return;
     }
 
@@ -71,8 +72,8 @@ void writeWav(const std::string& path,
     ok = ok && fwrite(pcm.data(), 1, pcm.size(), f) == pcm.size();
 
     if (!ok) {
-        fprintf(stderr, "warn: writeWav: short write to %s: %s\n",
-                path.c_str(), strerror(errno));
+        NT_LOG_WARN("wav", "writeWav short write to %s: %s",
+                    path.c_str(), strerror(errno));
     }
 
     fclose(f);

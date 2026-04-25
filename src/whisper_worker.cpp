@@ -1,4 +1,5 @@
 #include "whisper_worker.h"
+#include "app_logger.h"
 #include "constants.h"
 #include "output_writer.h"
 #include "wav_writer.h"
@@ -11,6 +12,20 @@
 #include <queue>
 #include <thread>
 #include <utility>
+
+static void whisperLogCallback(enum ggml_log_level level, const char* text, void*) {
+    LogLevel app_level = LogLevel::Info;
+    switch (level) {
+        case GGML_LOG_LEVEL_DEBUG: app_level = LogLevel::Debug; break;
+        case GGML_LOG_LEVEL_INFO:  app_level = LogLevel::Info;  break;
+        case GGML_LOG_LEVEL_WARN:  app_level = LogLevel::Warn;  break;
+        case GGML_LOG_LEVEL_ERROR: app_level = LogLevel::Error; break;
+        case GGML_LOG_LEVEL_NONE:
+        case GGML_LOG_LEVEL_CONT:
+        default:                   app_level = LogLevel::Info;  break;
+    }
+    AppLogger::log(app_level, "whisper.cpp", "%s", text ? text : "");
+}
 
 // ── Impl ──────────────────────────────────────────────────────────────────────
 
@@ -126,16 +141,19 @@ bool WhisperWorker::start() {
     // If no TranscribeFunc was provided (production path), load the model
     // and build the real whisper-based transcribe function.
     if (!impl_->transcribe) {
+        whisper_log_set(whisperLogCallback, nullptr);
+
         whisper_context_params cparams = whisper_context_default_params();
         cparams.use_gpu = impl_->use_metal;
 
-        fprintf(stderr, "info: loading model %s ...\n", impl_->model_path.c_str());
+        NT_LOG_WARN("whisper", "loading model path=%s metal=%s",
+                    impl_->model_path.c_str(), impl_->use_metal ? "true" : "false");
         impl_->ctx = whisper_init_from_file_with_params(impl_->model_path.c_str(), cparams);
         if (!impl_->ctx) {
-            fprintf(stderr, "error: failed to load model: %s\n", impl_->model_path.c_str());
+            NT_LOG_ERROR("whisper", "failed to load model path=%s", impl_->model_path.c_str());
             return false;
         }
-        fprintf(stderr, "info: model loaded\n");
+        NT_LOG_WARN("whisper", "model loaded path=%s", impl_->model_path.c_str());
 
         // Build TranscribeFunc that wraps the whisper C API.
         whisper_context* ctx = impl_->ctx;
@@ -184,10 +202,13 @@ void WhisperWorker::enqueue(std::vector<float> chunk, int64_t chunk_start_ms,
                             bool is_dictation) {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (impl_->queue.size() >= static_cast<size_t>(PROCESSING_QUEUE_MAX)) {
-        fprintf(stderr, "warn: transcription queue full, dropping oldest chunk\n");
+        NT_LOG_WARN("whisper", "transcription queue full; dropping oldest chunk queue_size=%zu",
+                    impl_->queue.size());
         impl_->queue.pop();
         if (impl_->on_error) impl_->on_error("Transcription queue full — audio chunk dropped");
     }
+    NT_LOG_DEBUG("whisper", "enqueue chunk samples=%zu dictation=%s queue_size_before=%zu",
+                 chunk.size(), is_dictation ? "true" : "false", impl_->queue.size());
     impl_->queue.push({std::move(chunk), chunk_start_ms, is_dictation});
     impl_->cv.notify_one();
 }
@@ -243,6 +264,8 @@ void WhisperWorker::workerLoop() {
         if (impl_->save_wav && !impl_->wav_dir.empty()) {
             char wav_name[64];
             snprintf(wav_name, sizeof(wav_name), "/chunk_%03d.wav", impl_->wav_chunk_idx++);
+            NT_LOG_DEBUG("whisper", "saving wav chunk path=%s%s samples=%zu",
+                         impl_->wav_dir.c_str(), wav_name, item.samples.size());
             writeWav(impl_->wav_dir + wav_name,
                      item.samples.data(), item.samples.size(),
                      WHISPER_SAMPLE_RATE);
@@ -254,7 +277,8 @@ void WhisperWorker::workerLoop() {
             lang, do_translate);
 
         if (!result.ok) {
-            fprintf(stderr, "warn: transcription failed\n");
+            NT_LOG_WARN("whisper", "transcription failed samples=%zu dictation=%s",
+                        item.samples.size(), item.is_dictation ? "true" : "false");
             if (impl_->on_error) impl_->on_error("Transcription failed");
             continue;
         }
@@ -274,9 +298,6 @@ void WhisperWorker::workerLoop() {
         for (const auto& seg : result.segments) {
             full_text += seg.text;
 
-            fprintf(stdout, "[%s]%s\n", ts, seg.text.c_str());
-            fflush(stdout);
-
             // Session path: add to OutputWriter with absolute timestamps.
             if (!item.is_dictation && ow) {
                 int64_t t0_ms = chunk_offset_ms + seg.t0 * 10;
@@ -284,6 +305,10 @@ void WhisperWorker::workerLoop() {
                 ow->addSegment(t0_ms, t1_ms, seg.text);
             }
         }
+
+        NT_LOG_DEBUG("whisper", "transcription ok dictation=%s samples=%zu segments=%zu chunk_time=%s",
+                     item.is_dictation ? "true" : "false",
+                     item.samples.size(), result.segments.size(), ts);
 
         if (item.is_dictation) {
             if (impl_->on_result && !full_text.empty()) {

@@ -1,4 +1,5 @@
 #include "event_tap.h"
+#include "app_logger.h"
 
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
@@ -33,8 +34,8 @@ static CGEventRef event_tap_callback(CGEventTapProxy __unused proxy,
     // Re-enable the tap if the system disabled it (e.g. after a timeout).
     if (type == kCGEventTapDisabledByTimeout ||
         type == kCGEventTapDisabledByUserInput) {
-        NSLog(@"[event_tap] tap disabled by %s — re-enabling",
-              type == kCGEventTapDisabledByTimeout ? "timeout" : "user input");
+        NT_LOG_WARN("event_tap", "tap disabled by %s; re-enabling",
+                    type == kCGEventTapDisabledByTimeout ? "timeout" : "user input");
         if (impl->tap) CGEventTapEnable(impl->tap, true);
         return event;
     }
@@ -95,9 +96,9 @@ bool EventTap::start(std::function<void()> on_down, std::function<void()> on_up,
     if (impl_->running) return true;
 
     bool trusted = isTrusted(prompt);
-    NSLog(@"[event_tap] AXIsProcessTrusted = %@", trusted ? @"YES" : @"NO");
+    NT_LOG_WARN("event_tap", "AXIsProcessTrusted=%s", trusted ? "YES" : "NO");
     if (!trusted) {
-        NSLog(@"[event_tap] Accessibility not granted — grant in System Settings");
+        NT_LOG_WARN("event_tap", "Accessibility not granted; grant in System Settings");
         return false;
     }
 
@@ -118,7 +119,7 @@ bool EventTap::start(std::function<void()> on_down, std::function<void()> on_up,
     );
 
     if (!impl_->tap) {
-        fprintf(stderr, "[event_tap] CGEventTapCreate failed (Accessibility denied?)\n");
+        NT_LOG_ERROR("event_tap", "CGEventTapCreate failed; Accessibility denied?");
         return false;
     }
 
@@ -143,7 +144,7 @@ bool EventTap::start(std::function<void()> on_down, std::function<void()> on_up,
             [](CFRunLoopTimerRef, void* info) {
                 EventTapImpl* impl = static_cast<EventTapImpl*>(info);
                 if (impl->tap && !CGEventTapIsEnabled(impl->tap)) {
-                    NSLog(@"[event_tap] health check: tap was disabled — re-enabling");
+                    NT_LOG_WARN("event_tap", "health check found tap disabled; re-enabling");
                     CGEventTapEnable(impl->tap, true);
                 }
             },

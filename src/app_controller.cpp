@@ -1,4 +1,5 @@
 #include "app_controller.h"
+#include "app_logger.h"
 #include "app_status.h"
 #include "audio_capture.h"
 #include "chunk_assembler.h"
@@ -75,6 +76,7 @@ struct AppController::Impl {
     void notifyMicStartFailure() {
         AudioStartError error = capture.lastStartError();
         if (error == AudioStartError::PermissionDenied) {
+            NT_LOG_ERROR("audio", "microphone permission denied");
             notifyStatus(AppStatus::ErrorMicDenied);
             return;
         }
@@ -89,6 +91,7 @@ struct AppController::Impl {
         } else if (error == AudioStartError::EngineStartFailed) {
             detail = "Audio engine could not be started";
         }
+        NT_LOG_ERROR("audio", "%s", detail);
         notifyStatus(AppStatus::ErrorGeneric, detail);
     }
 
@@ -108,6 +111,7 @@ struct AppController::Impl {
             }
         });
         mic_running = started;
+        NT_LOG_DEBUG("audio", "microphone start requested result=%s", started ? "ok" : "failed");
         return started;
     }
 
@@ -116,6 +120,7 @@ struct AppController::Impl {
         if (!mic_running) return;
         capture.stop();
         mic_running = false;
+        NT_LOG_DEBUG("audio", "microphone stopped");
     }
 
     void startMicControlThread() {
@@ -255,6 +260,9 @@ bool AppController::isRecording() const {
 
 bool AppController::start() {
     if (impl_->started.load(std::memory_order_acquire)) return true;
+    NT_LOG_WARN("controller", "starting controller model=%s language=%s output_dir=%s metal=%s",
+                impl_->model_path.c_str(), impl_->language.c_str(),
+                impl_->output_dir.c_str(), impl_->use_metal ? "true" : "false");
     impl_->shutting_down.store(false, std::memory_order_release);
     impl_->startMicControlThread();
 
@@ -267,6 +275,7 @@ bool AppController::start() {
 
     // Surface transcription errors to the user via the status callback.
     impl_->worker->setOnError([this](const std::string& msg) {
+        NT_LOG_WARN("whisper", "worker error: %s", msg.c_str());
         impl_->notifyStatus(AppStatus::ErrorTranscription, msg);
     });
 
@@ -281,6 +290,7 @@ bool AppController::start() {
     if (!impl_->worker->start()) {
         impl_->worker.reset(); // prevent enqueue() on a null whisper context
         impl_->stopMicControlThread();
+        NT_LOG_ERROR("controller", "failed to start worker model=%s", impl_->model_path.c_str());
         impl_->notifyStatus(AppStatus::ErrorModelNotFound);
         return false;
     }
@@ -307,20 +317,24 @@ bool AppController::start() {
     // forces Bluetooth headphones into low-quality HFP telephony mode and
     // shows the orange mic indicator permanently.
     impl_->capture.setOnConfigChange([this] {
+        NT_LOG_WARN("audio", "audio device configuration changed");
         impl_->notifyStatus(AppStatus::ErrorAudioDeviceChanged);
     });
     impl_->capture.setOnRecoveryFailed([this] {
+        NT_LOG_ERROR("audio", "audio recovery failed; restart required");
         impl_->notifyStatus(AppStatus::ErrorGeneric,
                             "Audio recovery failed — restart required");
     });
 
     impl_->started.store(true, std::memory_order_release);
+    NT_LOG_WARN("controller", "controller started");
     impl_->notifyStatus(AppStatus::Idle);
     return true;
 }
 
 void AppController::stop() {
     if (!impl_->started.exchange(false, std::memory_order_acq_rel)) return;
+    NT_LOG_WARN("controller", "stopping controller");
     impl_->mic_wanted.store(false, std::memory_order_release);
     impl_->shutting_down.store(true, std::memory_order_release);
     impl_->stopMicControlThread();
@@ -343,6 +357,7 @@ void AppController::stop() {
     }
     impl_->closeSessionWriter();
     impl_->mode_machine.reset();
+    NT_LOG_WARN("controller", "controller stopped");
 }
 
 // ── Hotkey state machine ──────────────────────────────────────────────────────
@@ -350,6 +365,7 @@ void AppController::stop() {
 void AppController::onHotkeyDown() {
     // Reject if the controller hasn't fully started yet (model still loading).
     if (!impl_->started.load(std::memory_order_acquire)) return;
+    NT_LOG_DEBUG("dictation", "hotkey down");
 
     {
         std::lock_guard<std::mutex> lock(impl_->dict_mutex);
@@ -368,6 +384,7 @@ void AppController::onHotkeyDown() {
 void AppController::onHotkeyUp() {
     if (!impl_->mode_machine.finishDictation())
         return; // only if we were DICTATING; emits Transcribing
+    NT_LOG_DEBUG("dictation", "hotkey up");
 
     // Signal the background thread that we no longer need the mic.
     impl_->mic_wanted.store(false, std::memory_order_release);
@@ -386,12 +403,14 @@ void AppController::onHotkeyUp() {
     // Keep the accidental-tap filter, but lower it now that dictation starts
     // the mic on demand and pays the AVAudioEngine warm-up cost on key-down.
     if (audio.size() < static_cast<size_t>(CAPTURE_SAMPLE_RATE * MIN_DICTATION_S)) {
+        NT_LOG_DEBUG("dictation", "discarded short dictation samples=%zu", audio.size());
         impl_->mode_machine.transcriptionDone(); // back to Idle
         return;
     }
 
     int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
+    NT_LOG_DEBUG("dictation", "queued dictation samples=%zu", audio.size());
     impl_->worker->enqueue(std::move(audio), now_ms, /*is_dictation=*/true);
     // Mode resets to IDLE inside the on_result callback.
 }
@@ -400,6 +419,7 @@ void AppController::onHotkeyUp() {
 
 void AppController::startSession() {
     impl_->mic_wanted.store(false, std::memory_order_release);
+    NT_LOG_WARN("recording", "start session requested output_dir=%s", impl_->output_dir.c_str());
 
     // Build session ID and set OutputWriter BEFORE changing mode to RECORDING,
     // so the worker already has a writer when the first audio frames arrive.
@@ -419,12 +439,14 @@ void AppController::startSession() {
 
     if (!impl_->mode_machine.tryRecord()) {
         // Another mode was active — roll back.
+        NT_LOG_WARN("recording", "start session rejected by mode machine");
         impl_->worker->setOutputWriter(nullptr);
         impl_->session_writer.reset();
         return;
     }
 
     if (!impl_->startMic()) {
+        NT_LOG_ERROR("recording", "failed to start microphone for recording session_id=%s", session_id);
         impl_->mode_machine.reset(); // back to Idle
         impl_->worker->setOutputWriter(nullptr);
         impl_->session_writer.reset();
@@ -437,6 +459,7 @@ void AppController::startSession() {
 void AppController::stopSession() {
     if (!impl_->mode_machine.stopRecord())
         return; // Finalizing status emitted by ModeMachine
+    NT_LOG_WARN("recording", "stop session requested");
 
     // Stop the producer first so no more callbacks can append to the assembler
     // while we are flushing and waiting for the worker queue to drain.
@@ -451,6 +474,7 @@ void AppController::stopSession() {
     // The callback fires on the worker thread; AppDelegate already dispatches
     // UI work to the main queue through notifyStatus.
     impl_->worker->setOnSessionDone([this] {
+        NT_LOG_WARN("recording", "session worker queue drained");
         impl_->closeSessionWriter();
         impl_->mode_machine.finalizeDone(); // back to Idle
     });

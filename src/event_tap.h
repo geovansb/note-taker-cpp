@@ -23,7 +23,7 @@ public:
     bool isTrusted(bool prompt = false) const;
 
     // Start monitoring. on_down/on_up are called on the internal CFRunLoop thread.
-    // Returns false and prints a warning to stderr if Accessibility is not granted.
+    // Returns false and logs a warning if Accessibility is not granted.
     bool start(std::function<void()> on_down, std::function<void()> on_up,
                bool prompt = false);
 
