@@ -254,7 +254,7 @@ static NSString* const kClipboardModeClear      = @"clear";
         dispatch_async(dispatch_get_main_queue(), ^{
             AppDelegate* d = weakSelf;
             if (!d) return;
-            injectText(text, [d clipboardClearDelaySecondsForInjection]);
+            injectText(text);
         });
     });
 

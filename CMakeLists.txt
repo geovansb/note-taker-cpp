@@ -37,6 +37,7 @@ add_executable(note-taker-bar MACOSX_BUNDLE
     src/output_writer.cpp
     src/wav_writer.cpp
     src/mode_machine.cpp
+    src/dictation_history.cpp
 )
 set_target_properties(note-taker-bar PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/bar/Info.plist"
@@ -128,3 +129,9 @@ add_executable(mode_machine_test
     src/mode_machine.cpp
 )
 target_include_directories(mode_machine_test PRIVATE src)
+
+add_executable(dictation_history_test
+    tests/dictation_history_test.cpp
+    src/dictation_history.cpp
+)
+target_include_directories(dictation_history_test PRIVATE src)
