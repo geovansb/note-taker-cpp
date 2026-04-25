@@ -72,6 +72,26 @@ struct AppController::Impl {
         if (on_status) on_status(AppStatusEvent(s, detail));
     }
 
+    void notifyMicStartFailure() {
+        AudioStartError error = capture.lastStartError();
+        if (error == AudioStartError::PermissionDenied) {
+            notifyStatus(AppStatus::ErrorMicDenied);
+            return;
+        }
+
+        const char* detail = "Microphone is allowed, but audio input failed to start";
+        if (error == AudioStartError::InvalidDeviceFormat) {
+            detail = "Audio input device is not ready";
+        } else if (error == AudioStartError::ConverterFailed) {
+            detail = "Audio format conversion could not be initialized";
+        } else if (error == AudioStartError::TapInstallFailed) {
+            detail = "Audio input tap could not be installed";
+        } else if (error == AudioStartError::EngineStartFailed) {
+            detail = "Audio engine could not be started";
+        }
+        notifyStatus(AppStatus::ErrorGeneric, detail);
+    }
+
     // Start/stop microphone on demand. Avoids keeping the mic always active,
     // which forces Bluetooth headphones into low-quality HFP telephony mode.
     bool startMic() {
@@ -126,7 +146,7 @@ struct AppController::Impl {
                     if (!shutting_down.load(std::memory_order_acquire) &&
                         mic_wanted.load(std::memory_order_acquire)) {
                         mode_machine.cancelDictation(); // back to Idle
-                        notifyStatus(AppStatus::ErrorMicDenied);
+                        notifyMicStartFailure();
                     }
                     lock.lock();
                     continue;
@@ -408,7 +428,7 @@ void AppController::startSession() {
         impl_->mode_machine.reset(); // back to Idle
         impl_->worker->setOutputWriter(nullptr);
         impl_->session_writer.reset();
-        impl_->notifyStatus(AppStatus::ErrorMicDenied);
+        impl_->notifyMicStartFailure();
         return;
     }
     // RecordingListening status emitted by ModeMachine

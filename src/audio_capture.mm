@@ -11,6 +11,7 @@ struct AudioCapture::Impl {
     id                configObserver = nil;
     bool              permission_checked = false;
     bool              permission_granted = false;
+    AudioStartError   last_start_error = AudioStartError::None;
     std::function<void()> on_config_change;
     std::function<void()> on_recovery_failed;
     std::function<void(const float*, size_t)> on_block; // kept for tap reinstall
@@ -47,6 +48,7 @@ struct AudioCapture::Impl {
         // (e.g. Bluetooth disconnect → 0 Hz / 0 channels).
         if (hwFormat.sampleRate < 1.0 || hwFormat.channelCount == 0) {
             fprintf(stderr, "warn: invalid hardware format — device not ready\n");
+            last_start_error = AudioStartError::InvalidDeviceFormat;
             return false;
         }
 
@@ -62,6 +64,7 @@ struct AudioCapture::Impl {
                             "(%.0fHz %uch → %dHz 1ch)\n",
                     hwFormat.sampleRate, (unsigned)hwFormat.channelCount,
                     CAPTURE_SAMPLE_RATE);
+            last_start_error = AudioStartError::ConverterFailed;
             return false;
         }
 
@@ -108,6 +111,7 @@ struct AudioCapture::Impl {
         } @catch (NSException* ex) {
             fprintf(stderr, "warn: installTapOnBus threw: %s — %s\n",
                     ex.name.UTF8String, ex.reason.UTF8String);
+            last_start_error = AudioStartError::TapInstallFailed;
             return false;
         }
         return true;
@@ -122,6 +126,8 @@ AudioCapture::~AudioCapture() {
 }
 
 bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
+    impl_->last_start_error = AudioStartError::None;
+
     // Request microphone permission once per process. The result is cached so
     // subsequent start() calls skip the semaphore wait entirely. This avoids a
     // potential deadlock: requestAccessForMediaType: may dispatch its completion
@@ -143,6 +149,7 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
     if (!impl_->permission_granted) {
         fprintf(stderr, "error: microphone permission denied — "
                         "enable in System Settings > Privacy > Microphone\n");
+        impl_->last_start_error = AudioStartError::PermissionDenied;
         return false;
     }
 
@@ -226,6 +233,7 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
     if (err) {
         fprintf(stderr, "error: AVAudioEngine failed to start: %s\n",
                 err.localizedDescription.UTF8String);
+        impl_->last_start_error = AudioStartError::EngineStartFailed;
         impl_->resetEngineState();
         return false;
     }
@@ -235,6 +243,10 @@ bool AudioCapture::start(std::function<void(const float*, size_t)> on_block) {
 
 void AudioCapture::stop() {
     impl_->resetEngineState();
+}
+
+AudioStartError AudioCapture::lastStartError() const {
+    return impl_->last_start_error;
 }
 
 void AudioCapture::setOnConfigChange(std::function<void()> cb) {

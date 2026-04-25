@@ -3,6 +3,15 @@
 #include <string>
 #include <vector>
 
+enum class AudioStartError {
+    None,
+    PermissionDenied,
+    InvalidDeviceFormat,
+    ConverterFailed,
+    TapInstallFailed,
+    EngineStartFailed,
+};
+
 // Captures microphone audio via AVAudioEngine.
 // Delivers float32 mono samples at CAPTURE_SAMPLE_RATE to on_block callback.
 // on_block is called from AVAudioEngine's internal audio thread — keep it fast.
@@ -18,6 +27,8 @@ public:
     // Returns false if permission denied or engine fails to start.
     bool start(std::function<void(const float*, size_t)> on_block);
     void stop();
+
+    AudioStartError lastStartError() const;
 
     // Optional: callback when the audio configuration changes (device unplugged,
     // format change, etc.). Called from the notification thread.
