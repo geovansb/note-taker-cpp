@@ -22,6 +22,23 @@ option(GGML_METAL "Enable Metal GPU acceleration (Apple Silicon)" ON)
 
 add_subdirectory(whisper.cpp)
 
+execute_process(
+    COMMAND git describe --tags --abbrev=0
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE NOTETAKER_GIT_TAG
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT NOTETAKER_GIT_TAG)
+    set(NOTETAKER_GIT_TAG "v0.0.0")
+endif()
+string(REGEX REPLACE "^v" "" NOTETAKER_BUNDLE_VERSION "${NOTETAKER_GIT_TAG}")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/bar/Info.plist.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/bar/Info.plist"
+    @ONLY
+)
+
 # ── note-taker-bar: unified menu bar app (M4) ────────────────────────────────
 
 add_executable(note-taker-bar MACOSX_BUNDLE
@@ -40,7 +57,7 @@ add_executable(note-taker-bar MACOSX_BUNDLE
     src/dictation_history.cpp
 )
 set_target_properties(note-taker-bar PROPERTIES
-    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/bar/Info.plist"
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/bar/Info.plist"
 )
 # Enable ARC for all ObjC/ObjC++ sources in this target so we can use
 # __weak references (required for safe dispatch_after blocks on Tahoe).

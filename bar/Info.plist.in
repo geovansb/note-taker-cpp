@@ -1,26 +1,25 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleExecutable</key>
+    <string>note-taker-bar</string>
     <key>CFBundleIdentifier</key>
     <string>com.local.note-taker-bar</string>
     <key>CFBundleName</key>
     <string>note-taker</string>
-    <key>CFBundleExecutable</key>
-    <string>note-taker-bar</string>
     <key>CFBundleVersion</key>
-    <string>4.0.0</string>
+    <string>@NOTETAKER_BUNDLE_VERSION@</string>
     <key>CFBundleShortVersionString</key>
-    <string>4.0</string>
-    <!-- Agent app: no Dock icon, no app switcher entry -->
+    <string>@NOTETAKER_BUNDLE_VERSION@</string>
     <key>LSUIElement</key>
     <true/>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Captures microphone audio for local transcription.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Used to inject transcribed text at the cursor position.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Captures microphone audio for local transcription.</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
 </dict>
 </plist>

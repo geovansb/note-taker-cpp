@@ -519,6 +519,38 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
     return button;
 }
 
+- (NSButton*)linkButtonWithTitle:(NSString*)title url:(NSString*)url {
+    NSButton* button = [NSButton buttonWithTitle:title target:self action:@selector(openLink:)];
+    button.bezelStyle = NSBezelStyleInline;
+    button.bordered = NO;
+    button.alignment = NSTextAlignmentLeft;
+    button.contentTintColor = [NSColor linkColor];
+    button.identifier = url;
+    return button;
+}
+
+- (NSStackView*)githubLinkRow {
+    NSImageView* icon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    NSImage* image = [NSImage imageWithSystemSymbolName:@"chevron.left.forwardslash.chevron.right"
+                               accessibilityDescription:@"GitHub"];
+    if (image) {
+        [image setTemplate:YES];
+        icon.image = image;
+        icon.contentTintColor = [NSColor labelColor];
+    }
+    icon.translatesAutoresizingMaskIntoConstraints = NO;
+    [icon.widthAnchor constraintEqualToConstant:20].active = YES;
+    [icon.heightAnchor constraintEqualToConstant:20].active = YES;
+
+    NSButton* link = [self linkButtonWithTitle:@"github.com/geovansb/note-taker-cpp"
+                                           url:@"https://github.com/geovansb/note-taker-cpp"];
+    NSStackView* row = [NSStackView stackViewWithViews:@[icon, link]];
+    row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row.alignment = NSLayoutAttributeCenterY;
+    row.spacing = 8;
+    return row;
+}
+
 - (void)showSettings:(id)__unused sender {
     if (!_settingsWindow) {
         NSRect frame = NSMakeRect(0, 0, 720, 460);
@@ -688,8 +720,16 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
         [stack addArrangedSubview:[self labelWithText:@"note-taker" fontSize:18 bold:YES]];
         [stack addArrangedSubview:[self labelWithText:[NSString stringWithFormat:@"Version %@", version] fontSize:13 bold:NO]];
         [stack addArrangedSubview:[self labelWithText:[NSString stringWithFormat:@"Active model: %@", _activeModel] fontSize:13 bold:NO]];
-        [stack addArrangedSubview:[self labelWithText:@"Local speech transcription powered by whisper.cpp." fontSize:13 bold:NO]];
-        [stack addArrangedSubview:[self labelWithText:@"github.com/geovansb/note-taker-cpp" fontSize:13 bold:NO]];
+        NSStackView* poweredBy = [NSStackView stackViewWithViews:@[
+            [self labelWithText:@"Local speech transcription powered by" fontSize:13 bold:NO],
+            [self linkButtonWithTitle:@"whisper.cpp" url:@"https://github.com/ggerganov/whisper.cpp"]
+        ]];
+        poweredBy.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        poweredBy.alignment = NSLayoutAttributeCenterY;
+        poweredBy.spacing = 4;
+        [stack addArrangedSubview:poweredBy];
+        [stack addArrangedSubview:[self labelWithText:@"Projeto no GitHub:" fontSize:13 bold:YES]];
+        [stack addArrangedSubview:[self githubLinkRow]];
         return;
     }
 
@@ -727,6 +767,13 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
 
 - (void)stopRecording:(id)__unused sender {
     if (_controller) _controller->stopSession();
+}
+
+- (void)openLink:(NSButton*)sender {
+    NSString* urlString = sender.identifier;
+    if (!urlString) return;
+    NSURL* url = [NSURL URLWithString:urlString];
+    if (url) [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
 - (void)copyRecentDictation:(NSMenuItem*)sender {

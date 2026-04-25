@@ -219,6 +219,8 @@ cmake --build build --parallel
 
 The build produces `build/note-taker-bar.app` — the menu bar app bundle.
 
+Release builds derive `CFBundleShortVersionString` and `CFBundleVersion` from the latest Git tag. Create the release tag first, using the `vX.Y.Z` format, then build from that tag so the app's About screen and the GitHub release version match.
+
 ---
 
 ## License
