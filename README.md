@@ -164,8 +164,6 @@ Shows app version, active model, and local transcription information.
 |----------|--------|
 | Cmd+R | Start Recording |
 | Shift+Cmd+R | Stop Recording |
-| Cmd+O | Open Notes Folder |
-| Cmd+L | Open Logs Folder |
 | Cmd+Q | Quit |
 
 ---
@@ -194,7 +192,7 @@ Key design decisions:
 ## Troubleshooting
 
 **Where are logs written?**
-Logs are stored inside the configured Notes Folder, under `logs/note-taker-bar.log`. Use **Open Logs Folder** from the menu bar app, or run:
+Logs are stored inside the configured Notes Folder, under `logs/note-taker-bar.log`. For the default Notes Folder, run:
 
 ```sh
 tail -f ~/notes/logs/note-taker-bar.log

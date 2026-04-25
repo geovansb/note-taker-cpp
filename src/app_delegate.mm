@@ -357,6 +357,12 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
     hint.enabled = NO;
     [menu addItem:hint];
 
+    NSMenuItem* recentParent = [[NSMenuItem alloc] initWithTitle:@"Recent Dictations"
+                                action:nil keyEquivalent:@""];
+    recentParent.tag = kTagRecentDictations;
+    recentParent.submenu = [self buildRecentDictationsMenu];
+    [menu addItem:recentParent];
+
     [menu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem* startRec = [[NSMenuItem alloc] initWithTitle:@"▶  Start Recording"
@@ -372,24 +378,6 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
     stopRec.tag     = kTagStopRecording;
     stopRec.enabled = NO;
     [menu addItem:stopRec];
-
-    NSMenuItem* openFolder = [[NSMenuItem alloc] initWithTitle:@"Open Notes Folder"
-                              action:@selector(openNotesFolder:) keyEquivalent:@"o"];
-    openFolder.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-    [menu addItem:openFolder];
-
-    NSMenuItem* openLogs = [[NSMenuItem alloc] initWithTitle:@"Open Logs Folder"
-                              action:@selector(openLogsFolder:) keyEquivalent:@"l"];
-    openLogs.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-    [menu addItem:openLogs];
-
-    [menu addItem:[NSMenuItem separatorItem]];
-
-    NSMenuItem* recentParent = [[NSMenuItem alloc] initWithTitle:@"Recent Dictations"
-                                action:nil keyEquivalent:@""];
-    recentParent.tag = kTagRecentDictations;
-    recentParent.submenu = [self buildRecentDictationsMenu];
-    [menu addItem:recentParent];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -667,34 +655,6 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
     if ([_settingsCategory isEqualToString:@"Recording"]) {
         NSStackView* stack = [self freshSettingsStackWithTitle:@"Recording"];
 
-        NSString* folderPath = [NSString stringWithUTF8String:_outputDir.c_str()];
-        NSTextField* folderField = [NSTextField textFieldWithString:folderPath ?: @""];
-        folderField.editable = NO;
-        folderField.selectable = YES;
-        folderField.lineBreakMode = NSLineBreakByTruncatingMiddle;
-        folderField.translatesAutoresizingMaskIntoConstraints = NO;
-
-        NSButton* change = [NSButton buttonWithTitle:@"Change…" target:self action:@selector(changeNotesFolder:)];
-        change.translatesAutoresizingMaskIntoConstraints = NO;
-        NSStackView* folderControls = [NSStackView stackViewWithViews:@[folderField, change]];
-        folderControls.orientation = NSUserInterfaceLayoutOrientationVertical;
-        folderControls.alignment = NSLayoutAttributeTrailing;
-        folderControls.spacing = 8;
-        folderControls.translatesAutoresizingMaskIntoConstraints = NO;
-        [folderField.widthAnchor constraintEqualToConstant:500].active = YES;
-
-        NSStackView* folderRow = [NSStackView stackViewWithViews:@[
-            [self labelWithText:@"Notes Folder" fontSize:13 bold:NO],
-            folderControls
-        ]];
-        folderRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-        folderRow.alignment = NSLayoutAttributeTop;
-        folderRow.spacing = 16;
-        folderRow.translatesAutoresizingMaskIntoConstraints = NO;
-        folderRow.views[0].translatesAutoresizingMaskIntoConstraints = NO;
-        [folderRow.views[0].widthAnchor constraintEqualToConstant:130].active = YES;
-        [stack addArrangedSubview:folderRow];
-
         NSString* sensitivity = [[NSUserDefaults standardUserDefaults] stringForKey:kSensitivityKey];
         [self addLabel:@"VAD Sensitivity"
                control:[self popupWithLabels:@[@"Low", @"Medium", @"High"]
@@ -710,6 +670,48 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
                                       current:silence
                                        action:@selector(selectSilenceTimeoutFromPopup:)]
                toStack:stack];
+
+        NSBox* separator = [[NSBox alloc] initWithFrame:NSZeroRect];
+        separator.boxType = NSBoxSeparator;
+        separator.translatesAutoresizingMaskIntoConstraints = NO;
+        [separator.widthAnchor constraintEqualToConstant:500].active = YES;
+        [stack addArrangedSubview:separator];
+
+        NSString* folderPath = [NSString stringWithUTF8String:_outputDir.c_str()];
+        NSTextField* folderField = [NSTextField textFieldWithString:folderPath ?: @""];
+        folderField.editable = NO;
+        folderField.selectable = YES;
+        folderField.lineBreakMode = NSLineBreakByTruncatingMiddle;
+        folderField.translatesAutoresizingMaskIntoConstraints = NO;
+        [folderField.widthAnchor constraintEqualToConstant:400].active = YES;
+
+        NSButton* openFolder = [NSButton buttonWithTitle:@"Open Folder"
+                                                  target:self
+                                                  action:@selector(openNotesFolder:)];
+        openFolder.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSButton* change = [NSButton buttonWithTitle:@"Change…" target:self action:@selector(changeNotesFolder:)];
+        change.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSStackView* folderHeader = [NSStackView stackViewWithViews:@[
+            [self labelWithText:@"Notes Folder" fontSize:16 bold:YES],
+            openFolder,
+            change
+        ]];
+        folderHeader.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        folderHeader.alignment = NSLayoutAttributeCenterY;
+        folderHeader.spacing = 12;
+        folderHeader.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSStackView* folderSection = [NSStackView stackViewWithViews:@[
+            folderHeader,
+            folderField
+        ]];
+        folderSection.orientation = NSUserInterfaceLayoutOrientationVertical;
+        folderSection.alignment = NSLayoutAttributeLeading;
+        folderSection.spacing = 8;
+        folderSection.translatesAutoresizingMaskIntoConstraints = NO;
+        [stack addArrangedSubview:folderSection];
         return;
     }
 
@@ -721,7 +723,7 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
         toggle.state = [self dictationHistoryEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
         [stack addArrangedSubview:toggle];
 
-        NSTextField* privacyNote = [self labelWithText:@"History is kept only in memory and disappears when the app quits. Dictation injection does not use the clipboard." fontSize:12 bold:NO];
+        NSTextField* privacyNote = [self labelWithText:@"History is kept only in memory and disappears when the app quits.\nDictation injection does not use the clipboard." fontSize:12 bold:NO];
         [privacyNote.widthAnchor constraintLessThanOrEqualToConstant:520].active = YES;
         NSView* checkboxOffset = [[NSView alloc] initWithFrame:NSZeroRect];
         checkboxOffset.translatesAutoresizingMaskIntoConstraints = NO;
@@ -859,23 +861,6 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
 
 - (void)openNotesFolder:(id)__unused sender {
     NSString* dir = [NSString stringWithUTF8String:_outputDir.c_str()];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:dir]) {
-        [[NSFileManager defaultManager] createDirectoryAtPath:dir
-                                  withIntermediateDirectories:YES
-                                                   attributes:nil
-                                                        error:nil];
-    }
-    [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:dir]];
-}
-
-- (void)openLogsFolder:(id)__unused sender {
-    std::string logsDir = AppLogger::logsDir();
-    if (logsDir.empty()) {
-        AppLogger::setNotesDir(_outputDir);
-        logsDir = AppLogger::logsDir();
-    }
-    NSString* dir = [NSString stringWithUTF8String:logsDir.c_str()];
-    if (!dir) return;
     if (![[NSFileManager defaultManager] fileExistsAtPath:dir]) {
         [[NSFileManager defaultManager] createDirectoryAtPath:dir
                                   withIntermediateDirectories:YES
