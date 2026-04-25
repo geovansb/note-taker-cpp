@@ -372,7 +372,15 @@ static constexpr NSInteger kTagRecentDictations   = 10;
 
     [menu addItem:[NSMenuItem separatorItem]];
 
-    [menu addItemWithTitle:@"Settings…" action:@selector(showSettings:) keyEquivalent:@","];
+    NSMenuItem* settings = [[NSMenuItem alloc] initWithTitle:@"Settings…"
+                              action:@selector(showSettings:) keyEquivalent:@","];
+    NSImage* gear = [NSImage imageWithSystemSymbolName:@"gearshape"
+                              accessibilityDescription:@"Settings"];
+    if (gear) {
+        [gear setTemplate:YES];
+        settings.image = gear;
+    }
+    [menu addItem:settings];
     [menu addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
 
     return menu;
