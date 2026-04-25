@@ -16,7 +16,7 @@ Both modes share a single Whisper model loaded in memory. Metal GPU acceleration
 - macOS 11+
 - CMake 3.22+
 - Xcode (full app, not just Command Line Tools)
-- **Metal Toolchain** — required for GPU shader compilation. Open Xcode → Settings → Components and install **Metal Toolchain** under "Other Components". Without it, the CMake build will fail when compiling Metal shaders.
+- **Metal Toolchain** — required for the default Metal build used by `scripts/build.sh`. Open Xcode → Settings → Components and install **Metal Toolchain** under "Other Components". For a CPU-only build, pass `-DGGML_METAL=OFF` to CMake.
 - ~1.5–3.1 GB disk space for the model
 
 ## Quick Start
@@ -36,10 +36,10 @@ cd note-taker-cpp
 ./scripts/start.sh
 ```
 
-On first launch, macOS will ask for two permissions:
+macOS permissions are requested as the app needs them:
 
-1. **Microphone** — needed to capture audio. Grant it in System Settings > Privacy & Security > Microphone.
-2. **Accessibility** — needed for the dictation hotkey and text injection. Grant it in System Settings > Privacy & Security > Accessibility.
+1. **Accessibility** — needed for the dictation hotkey and text injection. Grant it in System Settings > Privacy & Security > Accessibility. If it is not granted at launch, the app shows its own instructions and retries in the background after you enable it.
+2. **Microphone** — needed to capture audio. macOS prompts for it the first time you start dictation or a recording session. Grant it in System Settings > Privacy & Security > Microphone.
 
 If you deny either, the app will show a dialog with a button to open the relevant settings page. Recording sessions work without Accessibility; only dictation requires it.
 
@@ -78,7 +78,7 @@ The text is injected with Unicode keyboard events, so normal dictation does not 
 
 If **Save Last 9 Dictations** is enabled in **Settings → Privacy**, the app keeps recent dictations in memory until it quits. Use **Recent Dictations** in the menu bar to copy a previous dictation to the clipboard explicitly.
 
-Minimum recording length is 0.5 seconds to filter out accidental key taps.
+Minimum captured dictation length is 0.2 seconds to filter out accidental key taps.
 
 ### Session Recording Mode
 
@@ -148,6 +148,10 @@ How many seconds of silence the app waits before ending a speech chunk during se
 
 Shorter timeouts mean chunks are sent to Whisper sooner (lower latency for the transcript to appear), but may split sentences mid-thought. Longer timeouts produce more coherent segments but delay output.
 
+#### Notes Folder
+
+Choose where session transcripts and logs are stored. The default is `~/notes/`. The app can open the folder from Settings and validates that a new folder is writable before using it.
+
 ### Privacy
 
 **Save Last 9 Dictations** is off by default. When enabled, it keeps recent dictation texts only in app memory and exposes them through **Recent Dictations** in the menu bar. Clicking an item copies the full text to the clipboard. Recording sessions are not added to this history because they are already saved as files.
@@ -171,19 +175,19 @@ Shows app version, active model, and local transcription information.
 ## Architecture
 
 ```
-AVAudioEngine (audio thread)
-  └─ AudioCapture
-       └─ AppController routes by mode:
-            ├─ DICTATING  → buffer in memory
-            └─ RECORDING  → ChunkAssembler (VAD state machine)
-                                └─ WhisperWorker (dedicated thread)
-                                     ├─ Dictation path → TextInjector
-                                     └─ Session path   → OutputWriter → JSON + TXT
+Hotkey / menu action
+  └─ AppController
+       ├─ starts/stops AudioCapture on demand
+       ├─ DICTATING  → in-memory audio buffer
+       └─ RECORDING  → ChunkAssembler (VAD state machine)
+                           └─ WhisperWorker (dedicated thread)
+                                ├─ Dictation path → TextInjector
+                                └─ Session path   → OutputWriter → JSON + TXT
 ```
 
 Key design decisions:
 
-- **AudioCapture is always running** — the microphone stays open and audio is simply discarded when idle. This eliminates the ~300ms AVAudioEngine restart latency that would otherwise occur on every dictation keypress.
+- **AudioCapture starts on demand** — the microphone starts when dictation or session recording begins and stops when it ends. Dictation starts the mic asynchronously on key-down so the global hotkey run loop stays responsive, while avoiding a permanently open microphone, the orange mic indicator, and Bluetooth headset HFP mode when idle.
 - **Single model, single worker thread** — `whisper_full()` is blocking and not thread-safe. One dedicated thread processes a bounded queue. If the queue fills up (64 items), the oldest chunk is dropped.
 - **Modes are mutually exclusive** — you can't dictate while recording a session. The hotkey is ignored during recording, and Start Recording is disabled during dictation.
 
@@ -220,11 +224,11 @@ Increase VAD Sensitivity to High. If using an external microphone, check that it
 ## Building from Source
 
 ```sh
-# Standard build (CPU only)
-cmake -B build -DCMAKE_BUILD_TYPE=Release
+# CPU-only build
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=OFF
 cmake --build build --parallel
 
-# With Metal GPU acceleration (Apple Silicon)
+# With Metal GPU acceleration (Apple Silicon, default used by scripts/build.sh)
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON
 cmake --build build --parallel
 ```
