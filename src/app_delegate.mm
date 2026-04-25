@@ -657,18 +657,18 @@ static constexpr CGFloat   kSettingsRightPadding  = 36.0;
         NSButton* change = [NSButton buttonWithTitle:@"Change…" target:self action:@selector(changeNotesFolder:)];
         change.translatesAutoresizingMaskIntoConstraints = NO;
         NSStackView* folderControls = [NSStackView stackViewWithViews:@[folderField, change]];
-        folderControls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-        folderControls.alignment = NSLayoutAttributeCenterY;
+        folderControls.orientation = NSUserInterfaceLayoutOrientationVertical;
+        folderControls.alignment = NSLayoutAttributeTrailing;
         folderControls.spacing = 8;
         folderControls.translatesAutoresizingMaskIntoConstraints = NO;
-        [folderField.widthAnchor constraintEqualToConstant:330].active = YES;
+        [folderField.widthAnchor constraintEqualToConstant:500].active = YES;
 
         NSStackView* folderRow = [NSStackView stackViewWithViews:@[
             [self labelWithText:@"Notes Folder" fontSize:13 bold:NO],
             folderControls
         ]];
         folderRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-        folderRow.alignment = NSLayoutAttributeCenterY;
+        folderRow.alignment = NSLayoutAttributeTop;
         folderRow.spacing = 16;
         folderRow.translatesAutoresizingMaskIntoConstraints = NO;
         folderRow.views[0].translatesAutoresizingMaskIntoConstraints = NO;
