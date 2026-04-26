@@ -96,14 +96,20 @@ if(GGML_METAL AND NOT GGML_METAL_EMBED_LIBRARY)
         VERBATIM
     )
 endif()
-# Sign the whole .app bundle (not just the executable).
+# Sign the whole .app bundle and verify the seal. CMake updates
+# Contents/Info.plist as part of bundle assembly, which can land after the
+# binary is linked and silently invalidate a stale signature; re-signing on
+# every build and failing loudly on mismatch keeps TCC from rejecting the
+# app (which manifests as the app missing from System Settings > Privacy).
 add_custom_command(TARGET note-taker-bar POST_BUILD
     COMMAND codesign --force --sign -
             --entitlements "${CMAKE_CURRENT_SOURCE_DIR}/bar/entitlements.plist"
             --options runtime
-            --deep
             "$<TARGET_BUNDLE_DIR:note-taker-bar>"
-    COMMENT "Signing note-taker-bar.app"
+    COMMAND codesign --verify --verbose=1
+            "$<TARGET_BUNDLE_DIR:note-taker-bar>"
+    COMMENT "Signing and verifying note-taker-bar.app"
+    VERBATIM
 )
 
 # ── unit tests ────────────────────────────────────────────────────────────────
